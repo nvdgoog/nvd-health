@@ -3,7 +3,8 @@ set -euo pipefail
 
 PROJECT_ID="${GCP_PROJECT_ID:-house-tully-310623}"
 REGION="${GCP_REGION:-us-central1}"
-IMAGE="${CONTAINER_IMAGE:-${REGION}-docker.pkg.dev/${PROJECT_ID}/nvd-health/nvd-health-platform:latest}"
+IMAGE_TAG="${IMAGE_TAG:-$(date -u +%Y%m%d-%H%M%S)}"
+IMAGE="${CONTAINER_IMAGE:-${REGION}-docker.pkg.dev/${PROJECT_ID}/nvd-health/nvd-health-platform:${IMAGE_TAG}}"
 BUCKET="${GCS_RAW_BUCKET:-nvd-health-raw-data}"
 
 echo "==> 1. Enabling baseline APIs & Artifact Registry (if first deploy)"

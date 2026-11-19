@@ -6,7 +6,7 @@ import io
 import json
 import re
 from datetime import date, datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 from app.etl.schemas import TableSchemaSpec, to_snake_case
 
@@ -155,33 +155,31 @@ def compute_row_hash(row: Dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def parse_rfc4180_csv_bytes(
+def iter_rfc4180_csv_chunks(
     data: bytes,
     spec: TableSchemaSpec,
     source_file: str,
     run_id: str,
     ingested_at_iso: str,
-) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    chunk_size: int = 20000,
+) -> Iterator[Tuple[List[Dict[str, Any]], Dict[str, str]]]:
     """
-    Strictly parse RFC-4180 multi-line CSV bytes into typed row dicts.
+    Stream RFC-4180 multi-line CSV bytes in bounded-memory chunks of typed row dicts.
 
-    Handles embedded newlines/tabs inside double-quoted fields (e.g., UserExercises.intervals,
-    daily_sleep_breathing_quality intervals), converts NaN strings to None (SQL NULL),
-    and preserves -1 sentinel values in Bronze.
+    Handles embedded newlines/tabs inside double-quoted fields, converts NaN strings
+    to SQL NULL (None), and preserves -1 sentinel values in Bronze.
     """
-    text = data.decode("utf-8-sig", errors="replace")
-    if not text.strip():
-        return [], dict(spec.columns)
-
-    buf = io.StringIO(text, newline="")
-    reader = csv.reader(buf, dialect="excel")
+    text_stream = io.TextIOWrapper(
+        io.BytesIO(data), encoding="utf-8-sig", errors="replace", newline=""
+    )
+    reader = csv.reader(text_stream, dialect="excel")
     try:
         raw_headers = next(reader)
     except StopIteration:
-        return [], dict(spec.columns)
+        return
 
     if not raw_headers:
-        return [], dict(spec.columns)
+        return
 
     # Deduplicate normalized headers if a CSV ever repeats a name
     norm_headers: List[str] = []
@@ -195,31 +193,31 @@ def parse_rfc4180_csv_bytes(
             seen_counts[nh] = 0
         norm_headers.append(nh)
 
-    raw_records: List[Dict[str, Optional[str]]] = []
+    # Peek first 200 non-empty rows for dynamic type inference before streaming
+    sample_records: List[Dict[str, Optional[str]]] = []
     for row_vals in reader:
         if not row_vals or all((c or "").strip() == "" for c in row_vals):
             continue
         rec: Dict[str, Optional[str]] = {}
         for idx, col in enumerate(norm_headers):
             rec[col] = row_vals[idx] if idx < len(row_vals) else None
-        raw_records.append(rec)
+        sample_records.append(rec)
+        if len(sample_records) >= 200:
+            break
 
-    if not raw_records:
-        return [], dict(spec.columns)
+    if not sample_records:
+        return
 
     resolved_columns = dict(spec.columns)
     unknown_cols = [c for c in norm_headers if c not in resolved_columns]
     if unknown_cols:
-        inferred = infer_column_types(unknown_cols, raw_records[:200])
-        resolved_columns.update(inferred)
+        resolved_columns.update(infer_column_types(unknown_cols, sample_records))
 
-    parsed_rows: List[Dict[str, Any]] = []
-    for rec in raw_records:
+    def _convert_record(rec: Dict[str, Optional[str]]) -> Dict[str, Any]:
         typed: Dict[str, Any] = {}
         for col in norm_headers:
             bq_type = resolved_columns.get(col, "STRING")
             typed[col] = coerce_value(rec.get(col), bq_type)
-        # Ensure primary keys exist even if missing from sparse file
         for pk in spec.primary_keys:
             if pk not in typed and not pk.startswith("_"):
                 typed[pk] = None
@@ -227,9 +225,54 @@ def parse_rfc4180_csv_bytes(
         typed["_source_file"] = source_file
         typed["_run_id"] = run_id
         typed["_row_hash"] = compute_row_hash(typed)
-        parsed_rows.append(typed)
+        return typed
 
-    return parsed_rows, resolved_columns
+    chunk: List[Dict[str, Any]] = []
+    for r in sample_records:
+        chunk.append(_convert_record(r))
+        if len(chunk) >= chunk_size:
+            yield chunk, resolved_columns
+            chunk = []
+    sample_records.clear()
+
+    for row_vals in reader:
+        if not row_vals or all((c or "").strip() == "" for c in row_vals):
+            continue
+        rec = {
+            col: (row_vals[idx] if idx < len(row_vals) else None)
+            for idx, col in enumerate(norm_headers)
+        }
+        chunk.append(_convert_record(rec))
+        if len(chunk) >= chunk_size:
+            yield chunk, resolved_columns
+            chunk = []
+
+    if chunk:
+        yield chunk, resolved_columns
+
+
+def parse_rfc4180_csv_bytes(
+    data: bytes,
+    spec: TableSchemaSpec,
+    source_file: str,
+    run_id: str,
+    ingested_at_iso: str,
+) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    """
+    Strictly parse RFC-4180 multi-line CSV bytes into typed row dicts.
+    """
+    all_rows: List[Dict[str, Any]] = []
+    resolved = dict(spec.columns)
+    for chunk, cols in iter_rfc4180_csv_chunks(
+        data=data,
+        spec=spec,
+        source_file=source_file,
+        run_id=run_id,
+        ingested_at_iso=ingested_at_iso,
+    ):
+        all_rows.extend(chunk)
+        resolved = cols
+    return all_rows, resolved
 
 
 def rows_to_ndjson_bytes(rows: Iterable[Dict[str, Any]]) -> bytes:

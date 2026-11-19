@@ -43,30 +43,29 @@ def launch_etl_run(
 
     now = utc_now_iso()
     effective_prefixes = prefixes or ([zip_gcs_path] if zip_gcs_path else list(DEFAULT_SCAN_PREFIXES))
-    loader.upsert_etl_run(
-        {
-            "run_id": run_id,
-            "trigger_mode": mode,
-            "status": "QUEUED",
-            "current_stage": "Dispatching ETL worker",
-            "source_prefixes_json": json.dumps(effective_prefixes),
-            "files_total": 0,
-            "files_scanned": 0,
-            "files_loaded": 0,
-            "files_skipped": 0,
-            "files_failed": 0,
-            "rows_inserted": 0,
-            "rows_updated": 0,
-            "table_stats_json": json.dumps({}),
-            "dataform_compilation_id": None,
-            "dataform_invocation_id": None,
-            "dataform_status": "PENDING",
-            "error_message": None,
-            "started_at": now,
-            "updated_at": now,
-            "completed_at": None,
-        }
-    )
+    run_record: Dict[str, Any] = {
+        "run_id": run_id,
+        "trigger_mode": mode,
+        "status": "QUEUED",
+        "current_stage": "Dispatching ETL worker",
+        "source_prefixes_json": json.dumps(effective_prefixes),
+        "files_total": 0,
+        "files_scanned": 0,
+        "files_loaded": 0,
+        "files_skipped": 0,
+        "files_failed": 0,
+        "rows_inserted": 0,
+        "rows_updated": 0,
+        "table_stats_json": json.dumps({}),
+        "dataform_compilation_id": None,
+        "dataform_invocation_id": None,
+        "dataform_status": "PENDING",
+        "error_message": None,
+        "started_at": now,
+        "updated_at": now,
+        "completed_at": None,
+    }
+    loader.upsert_etl_run(run_record)
 
     if os.environ.get("LOCAL_INPROCESS_ETL", "").lower() == "true":
         thread = threading.Thread(
@@ -110,7 +109,18 @@ def launch_etl_run(
             ]
         ),
     )
-    operation = jobs_client.run_job(request=request)
+    try:
+        operation = jobs_client.run_job(request=request)
+    except Exception as exc:
+        err_now = utc_now_iso()
+        run_record["status"] = "FAILED"
+        run_record["current_stage"] = "Failed to dispatch Cloud Run Job"
+        run_record["error_message"] = str(exc)[:2000]
+        run_record["updated_at"] = err_now
+        run_record["completed_at"] = err_now
+        loader.upsert_etl_run(run_record)
+        raise
+
     execution_name = getattr(getattr(operation, "metadata", None), "name", "")
     return {
         "run_id": run_id,

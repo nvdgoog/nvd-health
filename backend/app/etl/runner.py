@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+import gc
 import hashlib
 import json
 import os
@@ -9,7 +11,7 @@ import zipfile
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from google.cloud import bigquery, storage
 
@@ -26,8 +28,10 @@ DEFAULT_SCAN_PREFIXES = [
     "uploads/",
 ]
 
-# Batch flush threshold to bound memory on high-frequency sensor streams (e.g. 673 heart_rate CSVs)
-BATCH_ROW_FLUSH_LIMIT = 40000
+# Bounded chunk & flush limit to prevent OOM on massive files (e.g. 882k-row sensor token CSVs)
+BATCH_ROW_FLUSH_LIMIT = 20000
+PREFETCH_WINDOW_SIZE = 40
+CHECKPOINT_FILE_INTERVAL = 100
 
 
 def utc_now_iso() -> str:
@@ -154,145 +158,186 @@ class HealthEtlRunner:
             ledger_buffer: List[Dict[str, Any]] = []
             readme_buffer: List[Dict[str, Any]] = []
 
+            def _checkpoint(stage_label: str) -> None:
+                for tbl_name, tbl_rows in list(pending_rows.items()):
+                    if tbl_rows:
+                        self._flush_table(
+                            tbl_name,
+                            pending_specs[tbl_name],
+                            tbl_rows,
+                            pending_cols[tbl_name],
+                            table_stats,
+                            run_state,
+                        )
+                        tbl_rows.clear()
+                if readme_buffer:
+                    doc_spec = SYSTEM_TABLES["bronze_schema_docs"]
+                    self.loader.load_and_merge_rows(
+                        doc_spec, readme_buffer, doc_spec.columns
+                    )
+                    readme_buffer.clear()
+                if ledger_buffer:
+                    self.loader.upsert_ledger_entries(ledger_buffer)
+                    ledger_buffer.clear()
+                run_state["current_stage"] = stage_label
+                run_state["table_stats_json"] = json.dumps(table_stats)
+                self._record_run(run_state)
+                gc.collect()
+
+            # Pre-filter blobs against ledger before downloading bytes
+            to_process: List[Tuple[int, storage.Blob, Any, str]] = []
             for idx, blob in enumerate(blobs, start=1):
                 blob_path = blob.name
                 if blob_path.endswith("/") or blob.size == 0:
                     continue
-
                 connector = self.registry.resolve(blob_path)
                 if connector is None:
                     run_state["files_scanned"] += 1
                     run_state["files_skipped"] += 1
                     continue
-
                 blob_hash = blob.md5_hash or blob.crc32c or str(blob.etag or "")
                 if not force_reload and ledger_hashes.get(blob_path) == blob_hash:
                     run_state["files_scanned"] += 1
                     run_state["files_skipped"] += 1
                     continue
+                to_process.append((idx, blob, connector, blob_hash))
 
-                try:
-                    raw_bytes = blob.download_as_bytes()
-                    content_hash = blob_hash or compute_bytes_md5_hex(raw_bytes)
-                    hash_type = "MD5" if blob.md5_hash else ("CRC32C" if blob.crc32c else "MD5_COMPUTED")
+            if run_state["files_skipped"] > 0:
+                run_state["current_stage"] = (
+                    f"Skipped {run_state['files_skipped']} unchanged files; "
+                    f"processing {len(to_process)} objects"
+                )
+                self._record_run(run_state)
 
-                    if connector.should_ignore(blob_path):
-                        readme_buffer.append(
-                            {
-                                "doc_path": blob_path,
-                                "content_hash": content_hash,
-                                "doc_text": raw_bytes.decode("utf-8-sig", errors="replace")[:50000],
-                                "ingested_at": utc_now_iso(),
-                            }
-                        )
-                        ledger_buffer.append(
-                            self._ledger_entry(
-                                blob_path=blob_path,
-                                content_hash=content_hash,
-                                hash_type=hash_type,
-                                source_type=connector.name,
-                                target_table="bronze_schema_docs",
-                                file_size_bytes=len(raw_bytes),
-                                row_count=1,
-                                status="IGNORED",
-                                error_message=None,
-                                run_id=run_id,
+            processed_since_checkpoint = 0
+            with ThreadPoolExecutor(max_workers=8) as download_pool:
+                for win_start in range(0, len(to_process), PREFETCH_WINDOW_SIZE):
+                    window = to_process[win_start : win_start + PREFETCH_WINDOW_SIZE]
+                    futures = {
+                        item[1].name: download_pool.submit(item[1].download_as_bytes)
+                        for item in window
+                    }
+
+                    for idx, blob, connector, blob_hash in window:
+                        blob_path = blob.name
+                        try:
+                            raw_bytes = futures[blob_path].result()
+                            content_hash = blob_hash or compute_bytes_md5_hex(raw_bytes)
+                            hash_type = (
+                                "MD5"
+                                if blob.md5_hash
+                                else ("CRC32C" if blob.crc32c else "MD5_COMPUTED")
                             )
-                        )
-                        run_state["files_scanned"] += 1
-                        run_state["files_skipped"] += 1
-                        continue
 
-                    items: List[ParsedBatchItem] = connector.parse(
-                        blob_path=blob_path,
-                        data=raw_bytes,
-                        run_id=run_id,
-                        ingested_at_iso=utc_now_iso(),
-                    )
-                    total_file_rows = 0
-                    target_names: List[str] = []
-                    for item in items:
-                        tname = item.spec.table_name
-                        target_names.append(tname)
-                        pending_specs[tname] = item.spec
-                        if tname not in pending_cols:
-                            pending_cols[tname] = dict(item.resolved_columns)
-                        else:
-                            pending_cols[tname].update(item.resolved_columns)
-                        pending_rows[tname].extend(item.rows)
-                        table_stats[tname]["files"] += 1
-                        total_file_rows += len(item.rows)
+                            if connector.should_ignore(blob_path):
+                                readme_buffer.append(
+                                    {
+                                        "doc_path": blob_path,
+                                        "content_hash": content_hash,
+                                        "doc_text": raw_bytes.decode(
+                                            "utf-8-sig", errors="replace"
+                                        )[:50000],
+                                        "ingested_at": utc_now_iso(),
+                                    }
+                                )
+                                ledger_buffer.append(
+                                    self._ledger_entry(
+                                        blob_path=blob_path,
+                                        content_hash=content_hash,
+                                        hash_type=hash_type,
+                                        source_type=connector.name,
+                                        target_table="bronze_schema_docs",
+                                        file_size_bytes=len(raw_bytes),
+                                        row_count=1,
+                                        status="IGNORED",
+                                        error_message=None,
+                                        run_id=run_id,
+                                    )
+                                )
+                                run_state["files_scanned"] += 1
+                                run_state["files_skipped"] += 1
+                            else:
+                                total_file_rows = 0
+                                target_names: List[str] = []
+                                seen_tables_in_file: Set[str] = set()
+                                file_size = len(raw_bytes)
+                                for item in connector.parse_chunks(
+                                    blob_path=blob_path,
+                                    data=raw_bytes,
+                                    run_id=run_id,
+                                    ingested_at_iso=utc_now_iso(),
+                                    chunk_size=BATCH_ROW_FLUSH_LIMIT,
+                                ):
+                                    tname = item.spec.table_name
+                                    if tname not in seen_tables_in_file:
+                                        seen_tables_in_file.add(tname)
+                                        target_names.append(tname)
+                                        table_stats[tname]["files"] += 1
+                                    pending_specs[tname] = item.spec
+                                    if tname not in pending_cols:
+                                        pending_cols[tname] = dict(item.resolved_columns)
+                                    else:
+                                        pending_cols[tname].update(item.resolved_columns)
+                                    pending_rows[tname].extend(item.rows)
+                                    total_file_rows += len(item.rows)
 
-                        if len(pending_rows[tname]) >= BATCH_ROW_FLUSH_LIMIT:
-                            self._flush_table(
-                                tname,
-                                pending_specs[tname],
-                                pending_rows[tname],
-                                pending_cols[tname],
-                                table_stats,
-                                run_state,
+                                    if len(pending_rows[tname]) >= BATCH_ROW_FLUSH_LIMIT:
+                                        self._flush_table(
+                                            tname,
+                                            pending_specs[tname],
+                                            pending_rows[tname],
+                                            pending_cols[tname],
+                                            table_stats,
+                                            run_state,
+                                        )
+                                        pending_rows[tname].clear()
+                                        gc.collect()
+
+                                del raw_bytes
+                                ledger_buffer.append(
+                                    self._ledger_entry(
+                                        blob_path=blob_path,
+                                        content_hash=content_hash,
+                                        hash_type=hash_type,
+                                        source_type=connector.name,
+                                        target_table=",".join(target_names) or "none",
+                                        file_size_bytes=file_size,
+                                        row_count=total_file_rows,
+                                        status="LOADED",
+                                        error_message=None,
+                                        run_id=run_id,
+                                    )
+                                )
+                                run_state["files_scanned"] += 1
+                                run_state["files_loaded"] += 1
+
+                        except Exception as exc:
+                            run_state["files_scanned"] += 1
+                            run_state["files_failed"] += 1
+                            ledger_buffer.append(
+                                self._ledger_entry(
+                                    blob_path=blob_path,
+                                    content_hash=blob_hash,
+                                    hash_type="MD5" if blob.md5_hash else "UNKNOWN",
+                                    source_type=connector.name,
+                                    target_table="error",
+                                    file_size_bytes=int(blob.size or 0),
+                                    row_count=0,
+                                    status="FAILED",
+                                    error_message=str(exc)[:1000],
+                                    run_id=run_id,
+                                )
                             )
-                            pending_rows[tname].clear()
 
-                    ledger_buffer.append(
-                        self._ledger_entry(
-                            blob_path=blob_path,
-                            content_hash=content_hash,
-                            hash_type=hash_type,
-                            source_type=connector.name,
-                            target_table=",".join(target_names) or "none",
-                            file_size_bytes=len(raw_bytes),
-                            row_count=total_file_rows,
-                            status="LOADED",
-                            error_message=None,
-                            run_id=run_id,
-                        )
-                    )
-                    run_state["files_scanned"] += 1
-                    run_state["files_loaded"] += 1
+                        processed_since_checkpoint += 1
+                        if processed_since_checkpoint >= CHECKPOINT_FILE_INTERVAL:
+                            _checkpoint(
+                                f"Checkpointed {run_state['files_scanned']}/{len(blobs)} objects"
+                            )
+                            processed_since_checkpoint = 0
 
-                except Exception as exc:
-                    run_state["files_scanned"] += 1
-                    run_state["files_failed"] += 1
-                    ledger_buffer.append(
-                        self._ledger_entry(
-                            blob_path=blob_path,
-                            content_hash=blob_hash,
-                            hash_type="MD5" if blob.md5_hash else "UNKNOWN",
-                            source_type=connector.name,
-                            target_table="error",
-                            file_size_bytes=int(blob.size or 0),
-                            row_count=0,
-                            status="FAILED",
-                            error_message=str(exc)[:1000],
-                            run_id=run_id,
-                        )
-                    )
-
-                if idx % 100 == 0:
-                    run_state["current_stage"] = f"Processed {idx}/{len(blobs)} objects"
-                    run_state["table_stats_json"] = json.dumps(table_stats)
-                    self._record_run(run_state)
-
-            # Flush remaining buffered Bronze tables
-            for tname, rows in list(pending_rows.items()):
-                if rows:
-                    self._flush_table(
-                        tname,
-                        pending_specs[tname],
-                        rows,
-                        pending_cols[tname],
-                        table_stats,
-                        run_state,
-                    )
-                    rows.clear()
-
-            if readme_buffer:
-                doc_spec = SYSTEM_TABLES["bronze_schema_docs"]
-                self.loader.load_and_merge_rows(doc_spec, readme_buffer, doc_spec.columns)
-
-            if ledger_buffer:
-                self.loader.upsert_ledger_entries(ledger_buffer)
+            # Final flush of remaining buffered Bronze tables & ledger
+            _checkpoint(f"Flushed {run_state['files_scanned']}/{len(blobs)} objects")
 
             # Auto-detect cpap_start_date from earliest non-zero CPAP usage night
             self.loader.refresh_auto_detected_cpap_start_date(

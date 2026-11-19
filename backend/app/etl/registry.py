@@ -3,9 +3,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-from app.etl.csv_parser import parse_rfc4180_csv_bytes
+from app.etl.csv_parser import iter_rfc4180_csv_chunks, parse_rfc4180_csv_bytes
 from app.etl.pdf_parser import parse_reacthealth_pdf_bytes
 from app.etl.schemas import (
     CORE_HEALTH_TABLES,
@@ -52,6 +52,18 @@ class BaseConnector(ABC):
         ingested_at_iso: str,
     ) -> List[ParsedBatchItem]:
         """Parse raw file bytes into one or more Bronze table payloads."""
+
+    def parse_chunks(
+        self,
+        blob_path: str,
+        data: bytes,
+        run_id: str,
+        ingested_at_iso: str,
+        chunk_size: int = 20000,
+    ) -> Iterator[ParsedBatchItem]:
+        """Yield parsed chunks for memory-bounded streaming of large CSVs."""
+        for item in self.parse(blob_path, data, run_id, ingested_at_iso):
+            yield item
 
 
 class GoogleTakeoutConnector(BaseConnector):
@@ -124,6 +136,31 @@ class GoogleTakeoutConnector(BaseConnector):
                 resolved_columns=resolved_cols,
             )
         ]
+
+    def parse_chunks(
+        self,
+        blob_path: str,
+        data: bytes,
+        run_id: str,
+        ingested_at_iso: str,
+        chunk_size: int = 20000,
+    ) -> Iterator[ParsedBatchItem]:
+        if self.should_ignore(blob_path):
+            return
+        spec = self.classify_spec(blob_path)
+        for rows, resolved_cols in iter_rfc4180_csv_chunks(
+            data=data,
+            spec=spec,
+            source_file=blob_path,
+            run_id=run_id,
+            ingested_at_iso=ingested_at_iso,
+            chunk_size=chunk_size,
+        ):
+            yield ParsedBatchItem(
+                spec=spec,
+                rows=rows,
+                resolved_columns=resolved_cols,
+            )
 
 
 class ReactHealthPdfConnector(BaseConnector):

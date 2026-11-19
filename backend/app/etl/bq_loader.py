@@ -122,6 +122,16 @@ class BigQueryBronzeLoader:
 
         # Seed cpap_start_date setting if missing
         self.ensure_default_cpap_setting(default_cpap_start_date)
+        self.cleanup_stale_staging_tables()
+
+    def cleanup_stale_staging_tables(self) -> None:
+        """Delete orphaned _stage_* tables left behind by interrupted runs."""
+        try:
+            for tbl in self.client.list_tables(f"{self.project_id}.{self.bronze_dataset}"):
+                if tbl.table_id.startswith("_stage_"):
+                    self.client.delete_table(tbl.reference, not_found_ok=True)
+        except Exception:
+            pass
 
     def ensure_table(
         self,
@@ -191,7 +201,8 @@ class BigQueryBronzeLoader:
         stage_fqn = self.fqn(stage_name)
         stage_schema = build_schema_fields(final_col_types)
 
-        ndjson_bytes = rows_to_ndjson_bytes(rows)
+        import tempfile
+
         job_config = bigquery.LoadJobConfig(
             schema=stage_schema,
             source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
@@ -199,15 +210,19 @@ class BigQueryBronzeLoader:
             ignore_unknown_values=True,
         )
 
-        import io
-
         try:
-            load_job = self.client.load_table_from_file(
-                io.BytesIO(ndjson_bytes),
-                stage_fqn,
-                job_config=job_config,
-                location=self.location,
-            )
+            with tempfile.NamedTemporaryFile(mode="w+b", suffix=".ndjson") as tmp_fp:
+                for row in rows:
+                    line = json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n"
+                    tmp_fp.write(line.encode("utf-8"))
+                tmp_fp.flush()
+                tmp_fp.seek(0)
+                load_job = self.client.load_table_from_file(
+                    tmp_fp,
+                    stage_fqn,
+                    job_config=job_config,
+                    location=self.location,
+                )
             load_job.result()
 
             merge_sql = build_merge_sql(

@@ -180,7 +180,7 @@ resource "google_cloud_run_v2_job" "etl_job" {
     task_count = 1
     template {
       service_account = google_service_account.etl_sa.email
-      max_retries     = 1
+      max_retries     = 0
       timeout         = "3600s"
 
       containers {
@@ -189,8 +189,8 @@ resource "google_cloud_run_v2_job" "etl_job" {
 
         resources {
           limits = {
-            cpu    = "2"
-            memory = "4Gi"
+            cpu    = "4"
+            memory = "8Gi"
           }
         }
 
@@ -225,12 +225,12 @@ resource "google_cloud_run_v2_job" "etl_job" {
   depends_on = [google_project_service.enabled]
 }
 
-# Allow Web SA to trigger Cloud Run Job executions
+# Allow Web SA to trigger Cloud Run Job executions with container env overrides
 resource "google_cloud_run_v2_job_iam_member" "web_trigger_etl" {
   project  = var.project_id
   location = var.region
   name     = google_cloud_run_v2_job.etl_job.name
-  role     = "roles/run.invoker"
+  role     = "roles/run.developer"
   member   = "serviceAccount:${google_service_account.web_sa.email}"
 }
 

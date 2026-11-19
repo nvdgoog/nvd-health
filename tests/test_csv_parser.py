@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.etl.csv_parser import parse_rfc4180_csv_bytes
+from app.etl.csv_parser import iter_rfc4180_csv_chunks, parse_rfc4180_csv_bytes
 from app.etl.schemas import CORE_HEALTH_TABLES, get_spec_for_google_family, infer_google_takeout_family
 
 
@@ -131,6 +131,25 @@ class TestCsvParser(unittest.TestCase):
         self.assertEqual(cols["custom_metric"], "FLOAT64")
         self.assertEqual(cols["device_id"], "STRING")
         self.assertEqual(rows[0]["custom_metric"], 42.5)
+
+    def test_streaming_chunks_bounded_memory(self) -> None:
+        lines = ["timestamp,beats per minute,data source"]
+        for i in range(5):
+            lines.append(f"2026-11-18T00:00:0{i}Z,{60 + i}.0,Pixel Watch 3")
+        raw = ("\n".join(lines) + "\n").encode("utf-8")
+        spec = CORE_HEALTH_TABLES["google_heart_rate"]
+        chunks = list(
+            iter_rfc4180_csv_chunks(
+                data=raw,
+                spec=spec,
+                source_file="heart_rate_2026-11-18.csv",
+                run_id="run-chunk",
+                ingested_at_iso="2026-11-19T00:00:00Z",
+                chunk_size=2,
+            )
+        )
+        self.assertEqual([len(c[0]) for c in chunks], [2, 2, 1])
+        self.assertEqual(chunks[2][0][0]["beats_per_minute"], 64.0)
 
 
 if __name__ == "__main__":
