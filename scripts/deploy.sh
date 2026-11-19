@@ -40,6 +40,11 @@ gcloud storage buckets update "gs://${BUCKET}" \
 echo "==> 4. Applying Terraform infrastructure"
 pushd infra/terraform >/dev/null
 terraform init -upgrade
+if ! terraform state show google_artifact_registry_repository.repo >/dev/null 2>&1; then
+  if gcloud artifacts repositories describe nvd-health --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+    terraform import -var="container_image=${IMAGE}" google_artifact_registry_repository.repo "projects/${PROJECT_ID}/locations/${REGION}/repositories/nvd-health" || true
+  fi
+fi
 terraform apply -var="container_image=${IMAGE}" -auto-approve
 popd >/dev/null
 

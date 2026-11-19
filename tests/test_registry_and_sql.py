@@ -4,8 +4,9 @@ from pathlib import Path
 import unittest
 
 from app.agent.sql_tools import validate_readonly_sql
+from app.etl.bq_loader import build_merge_sql
 from app.etl.registry import ConnectorRegistry
-from app.etl.schemas import infer_google_takeout_family
+from app.etl.schemas import CORE_HEALTH_TABLES, SYSTEM_TABLES, infer_google_takeout_family
 
 
 class TestRegistrySqlAndDataform(unittest.TestCase):
@@ -100,6 +101,37 @@ class TestRegistrySqlAndDataform(unittest.TestCase):
         self.assertIn("FROM ${ref(\"google_daily_resting_heart_rate\")}", sqlx)
         # Verify literal DATE(timestamp) appears for UTC-midnight daily summaries
         self.assertGreaterEqual(sqlx.count("DATE(timestamp) AS health_date"), 6)
+
+    def test_build_merge_sql_system_and_health_tables(self) -> None:
+        etl_spec = SYSTEM_TABLES["bronze_etl_runs"]
+        etl_sql = build_merge_sql(
+            "house-tully-310623.nvd_health_bronze.bronze_etl_runs",
+            "house-tully-310623.nvd_health_bronze._stage_etl",
+            etl_spec,
+            list(etl_spec.columns.keys()),
+        )
+        self.assertNotIn("_ingested_at", etl_sql)
+        self.assertIn("`updated_at` DESC NULLS LAST", etl_sql)
+
+        ledger_spec = SYSTEM_TABLES["bronze_ingestion_ledger"]
+        ledger_sql = build_merge_sql(
+            "house-tully-310623.nvd_health_bronze.bronze_ingestion_ledger",
+            "house-tully-310623.nvd_health_bronze._stage_ledger",
+            ledger_spec,
+            list(ledger_spec.columns.keys()),
+        )
+        self.assertNotIn("_ingested_at", ledger_sql)
+        self.assertIn("`ingested_at` DESC NULLS LAST", ledger_sql)
+
+        cpap_spec = CORE_HEALTH_TABLES["bronze_reacthealth_daily_usage"]
+        cpap_sql = build_merge_sql(
+            "house-tully-310623.nvd_health_bronze.bronze_reacthealth_daily_usage",
+            "house-tully-310623.nvd_health_bronze._stage_cpap",
+            cpap_spec,
+            list(cpap_spec.columns.keys()),
+        )
+        self.assertIn("report_generated_date", cpap_sql)
+        self.assertIn("`_ingested_at` DESC NULLS LAST", cpap_sql)
 
 
 if __name__ == "__main__":

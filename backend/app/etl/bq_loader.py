@@ -3,16 +3,19 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from google.cloud import bigquery
+if TYPE_CHECKING:
+    from google.cloud import bigquery
 
 from app.etl.csv_parser import rows_to_ndjson_bytes
 from app.etl.schemas import CORE_HEALTH_TABLES, SYSTEM_TABLES, TableSchemaSpec
 
 
-def build_schema_fields(columns: Dict[str, str]) -> List[bigquery.SchemaField]:
+def build_schema_fields(columns: Dict[str, str]) -> List["bigquery.SchemaField"]:
     """Convert a {col_name: bq_type} dict into BigQuery SchemaField objects."""
+    from google.cloud import bigquery
+
     return [
         bigquery.SchemaField(name=col_name, field_type=col_type, mode="NULLABLE")
         for col_name, col_type in columns.items()
@@ -35,11 +38,14 @@ def build_merge_sql(
     # Ensure PKs exist in all_columns
     valid_pks = [pk for pk in pk_cols if pk in all_columns] or ["_row_hash"]
 
-    order_expr = (
-        f"`{spec.order_by_column}` DESC NULLS LAST, `_ingested_at` DESC"
-        if spec.order_by_column and spec.order_by_column in all_columns
-        else "`_ingested_at` DESC"
-    )
+    order_parts: List[str] = []
+    if spec.order_by_column and spec.order_by_column in all_columns:
+        order_parts.append(f"`{spec.order_by_column}` DESC NULLS LAST")
+    for fallback_col in ("_ingested_at", "updated_at", "ingested_at", "started_at"):
+        if fallback_col in all_columns and fallback_col != spec.order_by_column:
+            order_parts.append(f"`{fallback_col}` DESC NULLS LAST")
+            break
+    order_expr = ", ".join(order_parts) if order_parts else "1"
     partition_by = ", ".join(f"`{pk}`" for pk in valid_pks)
 
     dedup_source = (
@@ -104,6 +110,8 @@ class BigQueryBronzeLoader:
         default_cpap_start_date: str = "2026-10-13",
     ) -> None:
         """Create Medallion datasets and empty typed core/system Bronze tables if absent."""
+        from google.cloud import bigquery
+
         for ds_id in (self.bronze_dataset, silver_dataset, gold_dataset):
             ds_ref = bigquery.Dataset(f"{self.project_id}.{ds_id}")
             ds_ref.location = self.location
@@ -119,8 +127,10 @@ class BigQueryBronzeLoader:
         self,
         spec: TableSchemaSpec,
         resolved_columns: Dict[str, str],
-    ) -> bigquery.Table:
+    ) -> "bigquery.Table":
         """Ensure target Bronze table exists with partitioning, clustering, and evolved columns."""
+        from google.cloud import bigquery
+
         table_id = self.fqn(spec.table_name)
         schema_fields = build_schema_fields(resolved_columns)
         try:
@@ -174,6 +184,8 @@ class BigQueryBronzeLoader:
         for k, v in merged_cols.items():
             if k not in final_col_types:
                 final_col_types[k] = v
+
+        from google.cloud import bigquery
 
         stage_name = f"_stage_{spec.table_name}_{uuid.uuid4().hex[:10]}"
         stage_fqn = self.fqn(stage_name)
@@ -238,6 +250,8 @@ class BigQueryBronzeLoader:
         self.load_and_merge_rows(spec, [run_record], spec.columns)
 
     def ensure_default_cpap_setting(self, default_date: str) -> None:
+        from google.cloud import bigquery
+
         sql = f"""
         MERGE `{self.fqn('bronze_app_settings')}` AS T
         USING (
@@ -265,6 +279,8 @@ class BigQueryBronzeLoader:
         Auto-detect the earliest non-zero CPAP usage night from bronze_reacthealth_daily_usage.
         Updates setting_value only if is_manual_override is FALSE.
         """
+        from google.cloud import bigquery
+
         detect_sql = f"""
         SELECT CAST(MIN(usage_date) AS STRING) AS first_nonzero_date
         FROM `{self.fqn('bronze_reacthealth_daily_usage')}`
