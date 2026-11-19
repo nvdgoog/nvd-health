@@ -741,12 +741,15 @@ def get_spec_for_google_family(family: str) -> TableSchemaSpec:
     if table_name in CORE_HEALTH_TABLES:
         return CORE_HEALTH_TABLES[table_name]
     hints = DYNAMIC_FAMILY_HINTS.get(family, {})
+    pks = tuple(hints.get("primary_keys", ("_row_hash",)))
+    clusters = ("_row_hash",) if pks == ("_row_hash",) else ()
     return TableSchemaSpec(
         table_name=table_name,
         columns=dict(METADATA_COLUMNS),
-        primary_keys=tuple(hints.get("primary_keys", ("_row_hash",))),
+        primary_keys=pks,
         order_by_column=hints.get("order_by_column"),  # type: ignore[arg-type]
         partition_field=hints.get("partition_field"),  # type: ignore[arg-type]
+        clustering_fields=clusters,
         allow_schema_evolution=True,
         description=f"Auto-discovered Google Health Takeout table for {family}.",
     )

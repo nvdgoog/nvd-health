@@ -321,18 +321,30 @@ def get_ingestion_ledger() -> Dict[str, Any]:
     LIMIT 50
     """
 
+    def _table_exists(table_fqn: str) -> bool:
+        try:
+            client.get_table(table_fqn)
+            return True
+        except Exception:
+            return False
+
     def safe_query(sql: str) -> List[Dict[str, Any]]:
         try:
             return [dict(r.items()) for r in client.query(sql).result()]
         except Exception:
             return []
 
-    cov_rows = safe_query(coverage_sql)
+    cov_rows = (
+        safe_query(coverage_sql)
+        if _table_exists(f"{silver_fqn}.daily_health_summary")
+        else []
+    )
+    bronze_exists = _table_exists(f"{bronze_fqn}.bronze_ingestion_ledger")
     return {
-        "sources": safe_query(sources_sql),
+        "sources": safe_query(sources_sql) if bronze_exists else [],
         "bronze_tables": safe_query(tables_sql),
         "coverage": cov_rows[0] if cov_rows else {},
-        "recent_files": safe_query(recent_files_sql),
+        "recent_files": safe_query(recent_files_sql) if bronze_exists else [],
     }
 
 

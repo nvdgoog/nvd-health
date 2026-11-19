@@ -56,7 +56,7 @@ def build_merge_sql(
     )
 
     on_clause = " AND ".join(
-        f"T.`{pk}` IS NOT DISTINCT FROM S.`{pk}`" for pk in valid_pks
+        f"T.`{pk}` = S.`{pk}`" for pk in valid_pks
     )
 
     non_pk_cols = [c for c in all_columns if c not in valid_pks]

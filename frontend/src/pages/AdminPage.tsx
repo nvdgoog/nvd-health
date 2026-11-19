@@ -82,7 +82,10 @@ export const AdminPage: React.FC = () => {
         api.getConnectors(),
       ]);
       setRuns(runsRes.runs);
-      if (!activeRun && runsRes.runs.length > 0) {
+      if (activeRun) {
+        const updated = runsRes.runs.find((r) => r.run_id === activeRun.run_id);
+        if (updated) setActiveRun(updated);
+      } else if (runsRes.runs.length > 0) {
         setActiveRun(runsRes.runs[0]);
       }
       setLedger(ledgerRes);

@@ -111,6 +111,8 @@ class TestRegistrySqlAndDataform(unittest.TestCase):
             list(etl_spec.columns.keys()),
         )
         self.assertNotIn("_ingested_at", etl_sql)
+        self.assertNotIn("IS NOT DISTINCT FROM", etl_sql)
+        self.assertIn("T.`run_id` = S.`run_id`", etl_sql)
         self.assertIn("`updated_at` DESC NULLS LAST", etl_sql)
 
         ledger_spec = SYSTEM_TABLES["bronze_ingestion_ledger"]

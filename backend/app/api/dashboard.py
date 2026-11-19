@@ -36,6 +36,14 @@ def _bq_client() -> bigquery.Client:
     return bigquery.Client(project=s.gcp_project_id, location=s.bq_location)
 
 
+def _table_exists(client: bigquery.Client, table_fqn: str) -> bool:
+    try:
+        client.get_table(table_fqn)
+        return True
+    except Exception:
+        return False
+
+
 @router.get("/dashboard/overview")
 def get_dashboard_overview(
     start_date: Optional[str] = Query(default=None),
@@ -44,6 +52,14 @@ def get_dashboard_overview(
     settings = get_settings()
     client = _bq_client()
     gold_fqn = f"{settings.gcp_project_id}.{settings.bq_dataset_gold}"
+    view_fqn = f"{gold_fqn}.v_daily_health_performance"
+
+    if not _table_exists(client, view_fqn):
+        return {
+            "cpap_start_date": settings.default_cpap_start_date,
+            "row_count": 0,
+            "days": [],
+        }
 
     where_clauses: List[str] = []
     params: List[bigquery.ScalarQueryParameter] = []
@@ -84,6 +100,9 @@ def get_cpap_before_after() -> Dict[str, Any]:
     settings = get_settings()
     client = _bq_client()
     gold_fqn = f"{settings.gcp_project_id}.{settings.bq_dataset_gold}"
+    view_fqn = f"{gold_fqn}.v_cpap_before_after_summary"
+    if not _table_exists(client, view_fqn):
+        return {"metrics": []}
     sql = f"""
     SELECT *
     FROM `{gold_fqn}.v_cpap_before_after_summary`
@@ -112,6 +131,15 @@ def get_correlations(
     settings = get_settings()
     client = _bq_client()
     silver_fqn = f"{settings.gcp_project_id}.{settings.bq_dataset_silver}"
+    if not _table_exists(client, f"{silver_fqn}.daily_health_summary"):
+        return {
+            "x": x,
+            "y": y,
+            "lag_next_night": lag_next_night,
+            "pearson_r": None,
+            "sample_size": 0,
+            "points": [],
+        }
 
     y_expr = f"LEAD({y_col}, 1) OVER (ORDER BY health_date)" if lag_next_night else y_col
     filters: List[str] = []
@@ -171,19 +199,21 @@ def get_intraday_drilldown(health_date: str) -> Dict[str, Any]:
     silver_fqn = f"{settings.gcp_project_id}.{settings.bq_dataset_silver}"
     bronze_fqn = f"{settings.gcp_project_id}.{settings.bq_dataset_bronze}"
 
-    day_sql = f"""
-    SELECT *
-    FROM `{silver_fqn}.daily_health_summary`
-    WHERE health_date = @hdate
-    LIMIT 1
-    """
-    day_cfg = bigquery.QueryJobConfig(
-        query_parameters=[bigquery.ScalarQueryParameter("hdate", "DATE", target_date.isoformat())]
-    )
-    try:
-        day_rows = [dict(r.items()) for r in client.query(day_sql, job_config=day_cfg).result()]
-    except Exception:
-        day_rows = []
+    day_rows: List[Dict[str, Any]] = []
+    if _table_exists(client, f"{silver_fqn}.daily_health_summary"):
+        day_sql = f"""
+        SELECT *
+        FROM `{silver_fqn}.daily_health_summary`
+        WHERE health_date = @hdate
+        LIMIT 1
+        """
+        day_cfg = bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("hdate", "DATE", target_date.isoformat())]
+        )
+        try:
+            day_rows = [dict(r.items()) for r in client.query(day_sql, job_config=day_cfg).result()]
+        except Exception:
+            day_rows = []
 
     day_summary = day_rows[0] if day_rows else {}
     sleep_id = day_summary.get("primary_sleep_id")
@@ -298,15 +328,19 @@ def _fetch_sleep_doctor_payload() -> Dict[str, Any]:
     settings = get_settings()
     client = _bq_client()
     gold_fqn = f"{settings.gcp_project_id}.{settings.bq_dataset_gold}"
-    sql = f"""
-    SELECT *
-    FROM `{gold_fqn}.v_sleep_doctor_weekly_summary`
-    ORDER BY health_date DESC
-    """
-    try:
-        rows = [dict(r.items()) for r in client.query(sql).result()]
-    except Exception:
+    view_fqn = f"{gold_fqn}.v_sleep_doctor_weekly_summary"
+    if not _table_exists(client, view_fqn):
         rows = []
+    else:
+        sql = f"""
+        SELECT *
+        FROM `{view_fqn}`
+        ORDER BY health_date DESC
+        """
+        try:
+            rows = [dict(r.items()) for r in client.query(sql).result()]
+        except Exception:
+            rows = []
 
     if not rows:
         return {
