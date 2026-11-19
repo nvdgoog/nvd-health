@@ -1,0 +1,87 @@
+config {
+  type: "view",
+  schema: dataform.projectConfig.vars.gold_dataset,
+  name: "v_cpap_before_after_summary",
+  description: "Statistical comparison view contrasting Pre-CPAP baseline vs. Post-CPAP therapy across SpO2, RHR, HRV, Sleep Score, Deep/REM %, Respiratory Rate, Readiness, and Stress."
+}
+
+WITH
+  long_metrics AS (
+    SELECT
+      IF(is_cpap_era, 'Post-CPAP', 'Pre-CPAP') AS era,
+      is_cpap_era,
+      metric_name,
+      metric_value
+    FROM ${ref("daily_health_summary")},
+    UNNEST([
+      STRUCT('spo2_avg_pct' AS metric_name, spo2_avg_pct AS metric_value),
+      STRUCT('spo2_min_pct', spo2_min_pct),
+      STRUCT('resting_heart_rate', resting_heart_rate),
+      STRUCT('hrv_rmssd_ms', hrv_rmssd_ms),
+      STRUCT('non_rem_hr_bpm', non_rem_hr_bpm),
+      STRUCT('sleep_overall_score', sleep_overall_score),
+      STRUCT('deep_sleep_pct', deep_sleep_pct),
+      STRUCT('rem_sleep_pct', rem_sleep_pct),
+      STRUCT('total_sleep_hours', CAST(total_sleep_minutes AS FLOAT64) / 60.0),
+      STRUCT('respiratory_rate_bpm', respiratory_rate_bpm),
+      STRUCT('readiness_score', readiness_score),
+      STRUCT('stress_score', stress_score)
+    ])
+    WHERE metric_value IS NOT NULL
+  ),
+
+  era_stats AS (
+    SELECT
+      metric_name,
+      era,
+      COUNT(*) AS sample_days,
+      AVG(metric_value) AS mean_val,
+      STDDEV_SAMP(metric_value) AS stddev_val,
+      APPROX_QUANTILES(metric_value, 100)[OFFSET(50)] AS median_val,
+      APPROX_QUANTILES(metric_value, 100)[OFFSET(10)] AS p10_val,
+      APPROX_QUANTILES(metric_value, 100)[OFFSET(90)] AS p90_val
+    FROM long_metrics
+    GROUP BY metric_name, era
+  ),
+
+  pre AS (
+    SELECT * FROM era_stats WHERE era = 'Pre-CPAP'
+  ),
+
+  post AS (
+    SELECT * FROM era_stats WHERE era = 'Post-CPAP'
+  ),
+
+  breathing_counts AS (
+    SELECT
+      COUNTIF(NOT is_cpap_era AND UPPER(COALESCE(breathing_quality, '')) LIKE '%OPTIMAL%') AS pre_optimal_breathing_days,
+      COUNTIF(NOT is_cpap_era AND breathing_quality IS NOT NULL) AS pre_breathing_days,
+      COUNTIF(is_cpap_era AND UPPER(COALESCE(breathing_quality, '')) LIKE '%OPTIMAL%') AS post_optimal_breathing_days,
+      COUNTIF(is_cpap_era AND breathing_quality IS NOT NULL) AS post_breathing_days
+    FROM ${ref("daily_health_summary")}
+  )
+
+SELECT
+  COALESCE(post.metric_name, pre.metric_name) AS metric_name,
+  pre.sample_days AS pre_days,
+  ROUND(pre.mean_val, 3) AS pre_mean,
+  ROUND(pre.stddev_val, 3) AS pre_stddev,
+  ROUND(pre.median_val, 3) AS pre_median,
+  ROUND(pre.p10_val, 3) AS pre_p10,
+  ROUND(pre.p90_val, 3) AS pre_p90,
+  post.sample_days AS post_days,
+  ROUND(post.mean_val, 3) AS post_mean,
+  ROUND(post.stddev_val, 3) AS post_stddev,
+  ROUND(post.median_val, 3) AS post_median,
+  ROUND(post.p10_val, 3) AS post_p10,
+  ROUND(post.p90_val, 3) AS post_p90,
+  ROUND(post.mean_val - pre.mean_val, 3) AS mean_delta,
+  ROUND(SAFE_DIVIDE(post.mean_val - pre.mean_val, NULLIF(pre.mean_val, 0)) * 100.0, 2) AS pct_change,
+  bc.pre_optimal_breathing_days,
+  bc.pre_breathing_days,
+  bc.post_optimal_breathing_days,
+  bc.post_breathing_days
+FROM pre
+FULL OUTER JOIN post
+  USING (metric_name)
+CROSS JOIN breathing_counts AS bc

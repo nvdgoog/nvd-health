@@ -1,0 +1,10 @@
+defaultProject: house-tully-310623
+defaultLocation: US
+defaultDataset: nvd_health_silver
+defaultAssertionDataset: nvd_health_silver
+dataformCoreVersion: 3.0.0
+vars:
+  bronze_dataset: nvd_health_bronze
+  silver_dataset: nvd_health_silver
+  gold_dataset: nvd_health_gold
+  default_cpap_start_date: "2026-10-13"

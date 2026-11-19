@@ -1,0 +1,620 @@
+config {
+  type: "table",
+  schema: dataform.projectConfig.vars.silver_dataset,
+  name: "daily_health_summary",
+  description: "Conformed daily personal health summary (1 row per America/Los_Angeles calendar date) combining Google Health Takeout, ReactHealth CPAP, nocturnal sensor rollups, and extensible hooks for Transcend Micro & ZenPlanner.",
+  bigquery: {
+    partitionBy: "health_date",
+    clusterBy: ["is_cpap_era"]
+  },
+  assertions: {
+    uniqueKey: ["health_date"],
+    nonNull: ["health_date"]
+  },
+  columns: {
+    health_date: "Calendar date in America/Los_Angeles (San Diego) aligning wake-up sleep/CPAP dates and UTC-midnight daily summaries.",
+    cpap_start_date: "Configured or auto-detected CPAP therapy start date (first non-zero CPAP usage night).",
+    is_cpap_era: "TRUE when health_date >= cpap_start_date.",
+    days_since_cpap_start: "Signed days relative to cpap_start_date.",
+    cpap_usage_minutes: "Nightly ReactHealth CPAP usage duration in minutes (00:00 preserved as 0).",
+    cpap_compliant_4h: "TRUE when nightly CPAP usage >= 240 minutes (4.0 hours).",
+    sleep_duration_score: "Google Health sleep duration sub-score (-1 sentinel converted to NULL).",
+    sleep_composition_score: "Google Health sleep composition sub-score (-1 sentinel converted to NULL).",
+    sleep_revitalization_score: "Google Health sleep revitalization sub-score (-1 sentinel converted to NULL)."
+  }
+}
+
+WITH
+  cpap_config AS (
+    SELECT
+      COALESCE(
+        SAFE_CAST(
+          (
+            SELECT setting_value
+            FROM ${ref("bronze_app_settings")}
+            WHERE setting_key = 'cpap_start_date'
+            LIMIT 1
+          ) AS DATE
+        ),
+        (
+          SELECT MIN(usage_date)
+          FROM ${ref("bronze_reacthealth_daily_usage")}
+          WHERE usage_minutes > 0
+        ),
+        DATE '${dataform.projectConfig.vars.default_cpap_start_date}'
+      ) AS cpap_start_date
+  ),
+
+  -- Sleep sessions aligned to Pacific wake-up date (DATE(sleep_end, 'America/Los_Angeles'))
+  sleep_sessions_local AS (
+    SELECT
+      sleep_id,
+      sleep_type,
+      minutes_in_sleep_period,
+      minutes_after_wake_up,
+      minutes_to_fall_asleep,
+      minutes_asleep,
+      minutes_awake,
+      minutes_longest_awakening,
+      minutes_to_persistent_sleep,
+      sleep_start,
+      sleep_end,
+      DATE(sleep_end, 'America/Los_Angeles') AS health_date
+    FROM ${ref("google_user_sleeps")}
+    WHERE sleep_end IS NOT NULL
+  ),
+
+  primary_sleep AS (
+    SELECT
+      health_date,
+      sleep_id AS primary_sleep_id,
+      sleep_type AS primary_sleep_type,
+      sleep_start AS primary_sleep_start,
+      sleep_end AS primary_sleep_end,
+      minutes_in_sleep_period AS primary_sleep_period_minutes,
+      minutes_asleep AS primary_sleep_minutes,
+      minutes_awake AS primary_sleep_awake_minutes,
+      minutes_to_fall_asleep,
+      minutes_after_wake_up,
+      minutes_longest_awakening,
+      minutes_to_persistent_sleep
+    FROM sleep_sessions_local
+    QUALIFY ROW_NUMBER() OVER (
+      PARTITION BY health_date
+      ORDER BY
+        CASE WHEN sleep_type = 'STAGES' THEN 0 ELSE 1 END,
+        minutes_asleep DESC,
+        sleep_end DESC
+    ) = 1
+  ),
+
+  daily_sleep_totals AS (
+    SELECT
+      s.health_date,
+      COUNT(*) AS sleep_session_count,
+      SUM(COALESCE(s.minutes_asleep, 0)) AS total_sleep_minutes,
+      SUM(
+        CASE
+          WHEN s.sleep_id != p.primary_sleep_id THEN COALESCE(s.minutes_asleep, 0)
+          ELSE 0
+        END
+      ) AS nap_minutes
+    FROM sleep_sessions_local AS s
+    LEFT JOIN primary_sleep AS p
+      USING (health_date)
+    GROUP BY s.health_date
+  ),
+
+  sleep_stages_agg AS (
+    SELECT
+      sleep_id,
+      SUM(CASE WHEN UPPER(sleep_stage_type) = 'DEEP' THEN TIMESTAMP_DIFF(sleep_stage_end, sleep_stage_start, SECOND) / 60.0 ELSE 0 END) AS deep_sleep_stage_minutes,
+      SUM(CASE WHEN UPPER(sleep_stage_type) = 'REM' THEN TIMESTAMP_DIFF(sleep_stage_end, sleep_stage_start, SECOND) / 60.0 ELSE 0 END) AS rem_sleep_stage_minutes,
+      SUM(CASE WHEN UPPER(sleep_stage_type) = 'LIGHT' THEN TIMESTAMP_DIFF(sleep_stage_end, sleep_stage_start, SECOND) / 60.0 ELSE 0 END) AS light_sleep_stage_minutes,
+      SUM(CASE WHEN UPPER(sleep_stage_type) IN ('WAKE', 'AWAKE') THEN TIMESTAMP_DIFF(sleep_stage_end, sleep_stage_start, SECOND) / 60.0 ELSE 0 END) AS awake_stage_minutes
+    FROM ${ref("google_user_sleep_stages")}
+    WHERE sleep_stage_start IS NOT NULL AND sleep_stage_end IS NOT NULL
+    GROUP BY sleep_id
+  ),
+
+  sleep_scores_clean AS (
+    SELECT
+      sleep_id,
+      overall_score AS sleep_overall_score,
+      NULLIF(duration_score, -1) AS sleep_duration_score,
+      NULLIF(composition_score, -1) AS sleep_composition_score,
+      NULLIF(revitalization_score, -1) AS sleep_revitalization_score,
+      deep_sleep_minutes AS score_deep_sleep_minutes,
+      rem_sleep_percent AS score_rem_sleep_percent,
+      resting_heart_rate AS sleep_score_rhr,
+      sleep_goal_minutes,
+      waso_count_long_wakes,
+      waso_count_all_wake_time,
+      restlessness_normalized,
+      hr_below_resting_hr
+    FROM ${ref("google_user_sleep_scores")}
+    QUALIFY ROW_NUMBER() OVER (
+      PARTITION BY sleep_id
+      ORDER BY sleep_score_last_updated DESC NULLS LAST, _ingested_at DESC
+    ) = 1
+  ),
+
+  -- Literal UTC-midnight daily summary tables (DO NOT shift timezone!)
+  daily_rhr AS (
+    SELECT
+      DATE(timestamp) AS health_date,
+      AVG(beats_per_minute) AS resting_heart_rate
+    FROM ${ref("google_daily_resting_heart_rate")}
+    WHERE timestamp IS NOT NULL
+    GROUP BY 1
+  ),
+
+  daily_hrv AS (
+    SELECT
+      DATE(timestamp) AS health_date,
+      AVG(average_heart_rate_variability_milliseconds) AS hrv_rmssd_ms,
+      AVG(non_rem_heart_rate_beats_per_minute) AS non_rem_hr_bpm,
+      AVG(entropy) AS hrv_entropy,
+      AVG(deep_sleep_root_mean_square_of_successive_differences_milliseconds) AS deep_sleep_rmssd_ms
+    FROM ${ref("google_daily_heart_rate_variability")}
+    WHERE timestamp IS NOT NULL
+    GROUP BY 1
+  ),
+
+  daily_spo2 AS (
+    SELECT
+      DATE(timestamp) AS health_date,
+      AVG(average_percentage) AS spo2_avg_pct,
+      MIN(lower_bound_percentage) AS spo2_min_pct,
+      MAX(upper_bound_percentage) AS spo2_max_pct,
+      AVG(baseline_percentage) AS spo2_baseline_pct,
+      AVG(standard_deviation_percentage) AS spo2_stddev_pct
+    FROM ${ref("google_daily_oxygen_saturation")}
+    WHERE timestamp IS NOT NULL
+    GROUP BY 1
+  ),
+
+  daily_resp AS (
+    SELECT
+      DATE(timestamp) AS health_date,
+      AVG(breaths_per_minute) AS respiratory_rate_bpm
+    FROM ${ref("google_daily_respiratory_rate")}
+    WHERE timestamp IS NOT NULL
+    GROUP BY 1
+  ),
+
+  daily_breathing AS (
+    SELECT
+      DATE(timestamp) AS health_date,
+      ANY_VALUE(breathing_quality) AS breathing_quality,
+      MAX(optimal_breathing_intervals) AS optimal_breathing_intervals,
+      MAX(strained_breathing_intervals) AS strained_breathing_intervals
+    FROM ${ref("google_daily_sleep_breathing_quality")}
+    WHERE timestamp IS NOT NULL
+    GROUP BY 1
+  ),
+
+  daily_skin_temp AS (
+    SELECT
+      DATE(timestamp) AS health_date,
+      AVG(nightly_temperature_celsius) AS nightly_skin_temp_celsius,
+      AVG(baseline_temperature_celsius) AS baseline_skin_temp_celsius,
+      AVG(relative_nightly_stddev_30d_celsius) AS skin_temp_deviation_celsius
+    FROM ${ref("google_daily_sleep_temperature_derivations")}
+    WHERE timestamp IS NOT NULL
+    GROUP BY 1
+  ),
+
+  daily_readiness AS (
+    SELECT
+      timestamp AS health_date,
+      AVG(score) AS readiness_score,
+      ANY_VALUE(readiness_level) AS readiness_level,
+      ANY_VALUE(sleep_readiness) AS sleep_readiness,
+      ANY_VALUE(heart_rate_variability_readiness) AS hrv_readiness,
+      ANY_VALUE(resting_heart_rate_readiness) AS rhr_readiness
+    FROM ${ref("google_daily_readiness")}
+    WHERE timestamp IS NOT NULL
+    GROUP BY 1
+  ),
+
+  daily_stress AS (
+    SELECT
+      DATE(date) AS health_date,
+      stress_score,
+      sleep_points AS stress_sleep_points,
+      responsiveness_points AS stress_responsiveness_points,
+      exertion_points AS stress_exertion_points,
+      status AS stress_status
+    FROM ${ref("google_stress_score")}
+    WHERE date IS NOT NULL
+    QUALIFY ROW_NUMBER() OVER (
+      PARTITION BY DATE(date)
+      ORDER BY updated_at DESC NULLS LAST, _ingested_at DESC
+    ) = 1
+  ),
+
+  daily_vo2max AS (
+    SELECT
+      DATE(timestamp) AS health_date,
+      AVG(COALESCE(filtered_demographic_vo2max, demographic_vo2max)) AS vo2max
+    FROM ${ref("google_demographic_vo2max")}
+    WHERE timestamp IS NOT NULL
+    GROUP BY 1
+  ),
+
+  daily_acwr AS (
+    SELECT
+      DATE(timestamp) AS health_date,
+      AVG(acute_chronic_workload_ratio) AS cardio_acwr,
+      AVG(acute_load) AS cardio_acute_load,
+      AVG(chronic_load) AS cardio_chronic_load
+    FROM ${ref("google_cardio_acute_chronic_workload_ratio")}
+    WHERE timestamp IS NOT NULL
+    GROUP BY 1
+  ),
+
+  -- Intraday streams shifted from UTC -> America/Los_Angeles
+  daily_hr_intraday AS (
+    SELECT
+      DATE(timestamp, 'America/Los_Angeles') AS health_date,
+      AVG(beats_per_minute) AS intraday_hr_avg,
+      MIN(beats_per_minute) AS intraday_hr_min,
+      MAX(beats_per_minute) AS intraday_hr_max,
+      COUNT(*) AS intraday_hr_samples
+    FROM ${ref("google_heart_rate")}
+    WHERE timestamp IS NOT NULL AND beats_per_minute > 0
+    GROUP BY 1
+  ),
+
+  nocturnal_hr_rollup AS (
+    SELECT
+      ps.health_date,
+      AVG(hr.beats_per_minute) AS nocturnal_hr_avg,
+      MIN(hr.beats_per_minute) AS nocturnal_hr_min,
+      APPROX_QUANTILES(hr.beats_per_minute, 100)[OFFSET(95)] AS nocturnal_hr_p95
+    FROM primary_sleep AS ps
+    INNER JOIN ${ref("google_heart_rate")} AS hr
+      ON hr.timestamp BETWEEN ps.primary_sleep_start AND ps.primary_sleep_end
+    WHERE hr.beats_per_minute > 0
+    GROUP BY ps.health_date
+  ),
+
+  nocturnal_spo2_rollup AS (
+    SELECT
+      ps.health_date,
+      AVG(sp.percentage) AS nocturnal_spo2_avg,
+      MIN(sp.percentage) AS nocturnal_spo2_min
+    FROM primary_sleep AS ps
+    INNER JOIN ${ref("google_oxygen_saturation")} AS sp
+      ON sp.timestamp BETWEEN ps.primary_sleep_start AND ps.primary_sleep_end
+    WHERE sp.percentage > 0
+    GROUP BY ps.health_date
+  ),
+
+  nocturnal_temp_rollup AS (
+    SELECT
+      ps.health_date,
+      AVG(bt.temperature_celsius) AS nocturnal_body_temp_avg
+    FROM primary_sleep AS ps
+    INNER JOIN ${ref("google_body_temperature")} AS bt
+      ON bt.timestamp BETWEEN ps.primary_sleep_start AND ps.primary_sleep_end
+    GROUP BY ps.health_date
+  ),
+
+  daily_steps AS (
+    SELECT
+      DATE(timestamp, 'America/Los_Angeles') AS health_date,
+      SUM(COALESCE(steps, 0)) AS steps
+    FROM ${ref("google_steps")}
+    WHERE timestamp IS NOT NULL
+    GROUP BY 1
+  ),
+
+  daily_calories AS (
+    SELECT
+      DATE(timestamp, 'America/Los_Angeles') AS health_date,
+      SUM(COALESCE(calories, 0)) AS calories_burned
+    FROM ${ref("google_calories")}
+    WHERE timestamp IS NOT NULL
+    GROUP BY 1
+  ),
+
+  daily_azm AS (
+    SELECT
+      DATE(timestamp, 'America/Los_Angeles') AS health_date,
+      SUM(COALESCE(active_zone_minutes, 0)) AS active_zone_minutes
+    FROM ${ref("google_active_zone_minutes")}
+    WHERE timestamp IS NOT NULL
+    GROUP BY 1
+  ),
+
+  daily_distance AS (
+    SELECT
+      DATE(timestamp, 'America/Los_Angeles') AS health_date,
+      SUM(COALESCE(distance_millimeters, 0)) / 1000000.0 AS distance_km
+    FROM ${ref("google_distance")}
+    WHERE timestamp IS NOT NULL
+    GROUP BY 1
+  ),
+
+  daily_floors AS (
+    SELECT
+      DATE(timestamp, 'America/Los_Angeles') AS health_date,
+      SUM(COALESCE(floors, 0)) AS floors_climbed
+    FROM ${ref("google_floors")}
+    WHERE timestamp IS NOT NULL
+    GROUP BY 1
+  ),
+
+  daily_weight AS (
+    SELECT
+      DATE(timestamp, 'America/Los_Angeles') AS health_date,
+      AVG(weight_grams) / 1000.0 AS weight_kg,
+      AVG(weight_grams) / 453.59237 AS weight_lbs,
+      AVG(bmi) AS bmi,
+      AVG(body_fat_percentage) AS body_fat_pct
+    FROM ${ref("google_weight")}
+    WHERE timestamp IS NOT NULL
+    GROUP BY 1
+  ),
+
+  daily_exercises AS (
+    SELECT
+      DATE(start_time, 'America/Los_Angeles') AS health_date,
+      COUNT(*) AS exercise_count,
+      SUM(COALESCE(duration_milliseconds, 0)) / 60000.0 AS exercise_duration_minutes,
+      SUM(COALESCE(calories, 0)) AS exercise_calories,
+      AVG(average_heart_rate) AS exercise_avg_hr,
+      MAX(max_heart_rate) AS exercise_max_hr,
+      STRING_AGG(DISTINCT exercise_type, ', ' ORDER BY exercise_type) AS exercise_types
+    FROM ${ref("google_user_exercises")}
+    WHERE start_time IS NOT NULL
+    GROUP BY 1
+  ),
+
+  -- ReactHealth CPAP nightly therapy aligned directly on wake-up date
+  daily_cpap AS (
+    SELECT
+      usage_date AS health_date,
+      device_sn AS cpap_device_sn,
+      mode AS cpap_mode,
+      usage_duration_str AS cpap_usage_duration_str,
+      usage_minutes AS cpap_usage_minutes,
+      usage_hours AS cpap_usage_hours,
+      pressure AS cpap_pressure,
+      p95 AS cpap_p95_pressure,
+      ahi AS cpap_ahi,
+      cai AS cpap_cai,
+      avg_leak AS cpap_avg_leak,
+      report_generated_date AS cpap_report_generated_date
+    FROM ${ref("bronze_reacthealth_daily_usage")}
+    WHERE usage_date IS NOT NULL
+    QUALIFY ROW_NUMBER() OVER (
+      PARTITION BY usage_date
+      ORDER BY report_generated_date DESC NULLS LAST, usage_minutes DESC, _ingested_at DESC
+    ) = 1
+  ),
+
+  -- Future connector aggregations (gracefully null when empty)
+  daily_transcend AS (
+    SELECT
+      usage_date AS health_date,
+      SUM(COALESCE(usage_minutes, 0)) AS transcend_usage_minutes,
+      AVG(ahi) AS transcend_ahi,
+      AVG(pressure) AS transcend_pressure
+    FROM ${ref("transcend_cpap_daily_usage")}
+    WHERE usage_date IS NOT NULL
+    GROUP BY 1
+  ),
+
+  daily_zenplanner AS (
+    SELECT
+      workout_date AS health_date,
+      COUNT(*) AS zenplanner_workout_count,
+      STRING_AGG(wod_name, ' | ' ORDER BY wod_name) AS zenplanner_wod_name,
+      LOGICAL_OR(COALESCE(rx_flag, FALSE)) AS zenplanner_rx_flag,
+      STRING_AGG(score_text, ' | ' ORDER BY workout_id) AS zenplanner_score_summary
+    FROM ${ref("zenplanner_workouts")}
+    WHERE workout_date IS NOT NULL
+    GROUP BY 1
+  ),
+
+  all_observed_dates AS (
+    SELECT health_date FROM primary_sleep
+    UNION DISTINCT SELECT health_date FROM daily_rhr
+    UNION DISTINCT SELECT health_date FROM daily_hrv
+    UNION DISTINCT SELECT health_date FROM daily_spo2
+    UNION DISTINCT SELECT health_date FROM daily_resp
+    UNION DISTINCT SELECT health_date FROM daily_readiness
+    UNION DISTINCT SELECT health_date FROM daily_stress
+    UNION DISTINCT SELECT health_date FROM daily_steps
+    UNION DISTINCT SELECT health_date FROM daily_cpap
+    UNION DISTINCT SELECT health_date FROM daily_exercises
+    UNION DISTINCT SELECT health_date FROM daily_transcend
+    UNION DISTINCT SELECT health_date FROM daily_zenplanner
+  ),
+
+  date_bounds AS (
+    SELECT
+      MIN(health_date) AS min_date,
+      MAX(health_date) AS max_date
+    FROM all_observed_dates
+    WHERE health_date IS NOT NULL
+  ),
+
+  date_spine AS (
+    SELECT d AS health_date
+    FROM date_bounds,
+    UNNEST(
+      IF(
+        min_date IS NOT NULL AND max_date IS NOT NULL,
+        GENERATE_DATE_ARRAY(min_date, max_date, INTERVAL 1 DAY),
+        CAST([] AS ARRAY<DATE>)
+      )
+    ) AS d
+  )
+
+SELECT
+  ds.health_date,
+  cfg.cpap_start_date,
+  ds.health_date >= cfg.cpap_start_date AS is_cpap_era,
+  DATE_DIFF(ds.health_date, cfg.cpap_start_date, DAY) AS days_since_cpap_start,
+
+  -- CPAP Therapy (ReactHealth)
+  cpap.cpap_device_sn,
+  cpap.cpap_mode,
+  cpap.cpap_usage_duration_str,
+  cpap.cpap_usage_minutes,
+  cpap.cpap_usage_hours,
+  CASE
+    WHEN cpap.cpap_usage_minutes IS NULL THEN NULL
+    ELSE cpap.cpap_usage_minutes >= 240
+  END AS cpap_compliant_4h,
+  cpap.cpap_pressure,
+  cpap.cpap_p95_pressure,
+  cpap.cpap_ahi,
+  cpap.cpap_cai,
+  cpap.cpap_avg_leak,
+  cpap.cpap_report_generated_date,
+
+  -- Sleep Architecture & Scores (Wake-up date in America/Los_Angeles)
+  ps.primary_sleep_id,
+  ps.primary_sleep_type,
+  ps.primary_sleep_start,
+  ps.primary_sleep_end,
+  ps.primary_sleep_period_minutes,
+  ps.primary_sleep_minutes,
+  ps.primary_sleep_awake_minutes,
+  ps.minutes_to_fall_asleep,
+  ps.minutes_after_wake_up,
+  ps.minutes_longest_awakening,
+  ps.minutes_to_persistent_sleep,
+  dst.sleep_session_count,
+  dst.total_sleep_minutes,
+  dst.nap_minutes,
+  COALESCE(ROUND(ssa.deep_sleep_stage_minutes, 1), CAST(sc.score_deep_sleep_minutes AS FLOAT64)) AS deep_sleep_minutes,
+  ROUND(ssa.rem_sleep_stage_minutes, 1) AS rem_sleep_minutes,
+  ROUND(ssa.light_sleep_stage_minutes, 1) AS light_sleep_minutes,
+  ROUND(ssa.awake_stage_minutes, 1) AS sleep_stage_awake_minutes,
+  SAFE_DIVIDE(
+    COALESCE(ssa.deep_sleep_stage_minutes, CAST(sc.score_deep_sleep_minutes AS FLOAT64)) * 100.0,
+    NULLIF(ps.primary_sleep_minutes, 0)
+  ) AS deep_sleep_pct,
+  COALESCE(
+    SAFE_DIVIDE(ssa.rem_sleep_stage_minutes * 100.0, NULLIF(ps.primary_sleep_minutes, 0)),
+    sc.score_rem_sleep_percent
+  ) AS rem_sleep_pct,
+  SAFE_DIVIDE(ssa.light_sleep_stage_minutes * 100.0, NULLIF(ps.primary_sleep_minutes, 0)) AS light_sleep_pct,
+  sc.sleep_overall_score,
+  sc.sleep_duration_score,
+  sc.sleep_composition_score,
+  sc.sleep_revitalization_score,
+  sc.sleep_goal_minutes,
+  sc.waso_count_long_wakes,
+  sc.waso_count_all_wake_time,
+  sc.restlessness_normalized,
+  sc.hr_below_resting_hr,
+
+  -- Cardiovascular, Recovery, Oxygenation & Stress
+  COALESCE(rhr.resting_heart_rate, sc.sleep_score_rhr) AS resting_heart_rate,
+  hrv.hrv_rmssd_ms,
+  hrv.non_rem_hr_bpm,
+  hrv.hrv_entropy,
+  hrv.deep_sleep_rmssd_ms,
+  COALESCE(spo2.spo2_avg_pct, nspo2.nocturnal_spo2_avg) AS spo2_avg_pct,
+  COALESCE(spo2.spo2_min_pct, nspo2.nocturnal_spo2_min) AS spo2_min_pct,
+  spo2.spo2_max_pct,
+  spo2.spo2_baseline_pct,
+  spo2.spo2_stddev_pct,
+  resp.respiratory_rate_bpm,
+  br.breathing_quality,
+  br.optimal_breathing_intervals,
+  br.strained_breathing_intervals,
+  st.nightly_skin_temp_celsius,
+  st.baseline_skin_temp_celsius,
+  st.skin_temp_deviation_celsius,
+  rd.readiness_score,
+  rd.readiness_level,
+  rd.sleep_readiness,
+  rd.hrv_readiness,
+  rd.rhr_readiness,
+  str.stress_score,
+  str.stress_sleep_points,
+  str.stress_responsiveness_points,
+  str.stress_exertion_points,
+  str.stress_status,
+
+  -- Intraday & Nocturnal Sensor Rollups
+  hr_day.intraday_hr_avg,
+  hr_day.intraday_hr_min,
+  hr_day.intraday_hr_max,
+  hr_day.intraday_hr_samples,
+  nhr.nocturnal_hr_avg,
+  nhr.nocturnal_hr_min,
+  nhr.nocturnal_hr_p95,
+  nspo2.nocturnal_spo2_avg,
+  nspo2.nocturnal_spo2_min,
+  ntemp.nocturnal_body_temp_avg,
+
+  -- Activity, Body Composition & Fitness
+  stp.steps,
+  cal.calories_burned,
+  azm.active_zone_minutes,
+  dist.distance_km,
+  flr.floors_climbed,
+  vo2.vo2max,
+  acwr.cardio_acwr,
+  acwr.cardio_acute_load,
+  acwr.cardio_chronic_load,
+  wt.weight_kg,
+  wt.weight_lbs,
+  wt.bmi,
+  wt.body_fat_pct,
+  ex.exercise_count,
+  ex.exercise_duration_minutes,
+  ex.exercise_calories,
+  ex.exercise_avg_hr,
+  ex.exercise_max_hr,
+  ex.exercise_types,
+
+  -- Extensible Schema Hooks for Transcend Micro & ZenPlanner
+  tr.transcend_usage_minutes,
+  tr.transcend_ahi,
+  tr.transcend_pressure,
+  zp.zenplanner_workout_count,
+  zp.zenplanner_wod_name,
+  zp.zenplanner_rx_flag,
+  zp.zenplanner_score_summary
+FROM date_spine AS ds
+CROSS JOIN cpap_config AS cfg
+LEFT JOIN daily_cpap AS cpap USING (health_date)
+LEFT JOIN primary_sleep AS ps USING (health_date)
+LEFT JOIN daily_sleep_totals AS dst USING (health_date)
+LEFT JOIN sleep_stages_agg AS ssa
+  ON ps.primary_sleep_id = ssa.sleep_id
+LEFT JOIN sleep_scores_clean AS sc
+  ON ps.primary_sleep_id = sc.sleep_id
+LEFT JOIN daily_rhr AS rhr USING (health_date)
+LEFT JOIN daily_hrv AS hrv USING (health_date)
+LEFT JOIN daily_spo2 AS spo2 USING (health_date)
+LEFT JOIN daily_resp AS resp USING (health_date)
+LEFT JOIN daily_breathing AS br USING (health_date)
+LEFT JOIN daily_skin_temp AS st USING (health_date)
+LEFT JOIN daily_readiness AS rd USING (health_date)
+LEFT JOIN daily_stress AS str USING (health_date)
+LEFT JOIN daily_vo2max AS vo2 USING (health_date)
+LEFT JOIN daily_acwr AS acwr USING (health_date)
+LEFT JOIN daily_hr_intraday AS hr_day USING (health_date)
+LEFT JOIN nocturnal_hr_rollup AS nhr USING (health_date)
+LEFT JOIN nocturnal_spo2_rollup AS nspo2 USING (health_date)
+LEFT JOIN nocturnal_temp_rollup AS ntemp USING (health_date)
+LEFT JOIN daily_steps AS stp USING (health_date)
+LEFT JOIN daily_calories AS cal USING (health_date)
+LEFT JOIN daily_azm AS azm USING (health_date)
+LEFT JOIN daily_distance AS dist USING (health_date)
+LEFT JOIN daily_floors AS flr USING (health_date)
+LEFT JOIN daily_weight AS wt USING (health_date)
+LEFT JOIN daily_exercises AS ex USING (health_date)
+LEFT JOIN daily_transcend AS tr USING (health_date)
+LEFT JOIN daily_zenplanner AS zp USING (health_date)

@@ -1,0 +1,68 @@
+config {
+  type: "view",
+  schema: dataform.projectConfig.vars.gold_dataset,
+  name: "v_daily_health_performance",
+  description: "Primary Gold dashboard view enriching Silver daily_health_summary with 7d/30d rolling averages, sleep efficiency, mask-off sleep gap, CPAP adherence streaks, and Pre/Post-CPAP era labels."
+}
+
+WITH
+  base AS (
+    SELECT
+      *,
+      IF(is_cpap_era, 'Post-CPAP', 'Pre-CPAP') AS era,
+      SAFE_DIVIDE(primary_sleep_minutes, NULLIF(primary_sleep_period_minutes, 0)) * 100.0 AS sleep_efficiency_pct,
+      CASE
+        WHEN total_sleep_minutes IS NOT NULL AND cpap_usage_minutes IS NOT NULL
+          THEN total_sleep_minutes - cpap_usage_minutes
+        ELSE NULL
+      END AS mask_off_sleep_gap_minutes,
+      COALESCE(cpap_usage_minutes, 0) >= 240 AS is_compliant_day,
+      CASE
+        WHEN COALESCE(cpap_usage_minutes, 0) < 240 THEN 1
+        ELSE 0
+      END AS non_compliant_break
+    FROM ${ref("daily_health_summary")}
+  ),
+
+  streak_groups AS (
+    SELECT
+      *,
+      SUM(non_compliant_break) OVER (
+        ORDER BY health_date
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      ) AS streak_group_id
+    FROM base
+  )
+
+SELECT
+  *,
+  CASE
+    WHEN is_compliant_day THEN
+      SUM(IF(is_compliant_day, 1, 0)) OVER (
+        PARTITION BY streak_group_id
+        ORDER BY health_date
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      )
+    ELSE 0
+  END AS cpap_adherence_streak_days,
+
+  -- 7-day rolling averages
+  AVG(spo2_avg_pct) OVER (ORDER BY health_date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS spo2_avg_7d,
+  AVG(resting_heart_rate) OVER (ORDER BY health_date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS rhr_avg_7d,
+  AVG(hrv_rmssd_ms) OVER (ORDER BY health_date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS hrv_avg_7d,
+  AVG(sleep_overall_score) OVER (ORDER BY health_date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS sleep_score_avg_7d,
+  AVG(total_sleep_minutes / 60.0) OVER (ORDER BY health_date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS sleep_hours_avg_7d,
+  AVG(readiness_score) OVER (ORDER BY health_date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS readiness_avg_7d,
+  AVG(cpap_usage_hours) OVER (ORDER BY health_date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS cpap_hours_avg_7d,
+  AVG(cpap_ahi) OVER (ORDER BY health_date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS cpap_ahi_avg_7d,
+
+  -- 30-day rolling averages
+  AVG(spo2_avg_pct) OVER (ORDER BY health_date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) AS spo2_avg_30d,
+  AVG(resting_heart_rate) OVER (ORDER BY health_date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) AS rhr_avg_30d,
+  AVG(hrv_rmssd_ms) OVER (ORDER BY health_date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) AS hrv_avg_30d,
+  AVG(sleep_overall_score) OVER (ORDER BY health_date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) AS sleep_score_avg_30d,
+  AVG(total_sleep_minutes / 60.0) OVER (ORDER BY health_date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) AS sleep_hours_avg_30d,
+  AVG(readiness_score) OVER (ORDER BY health_date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) AS readiness_avg_30d,
+  AVG(cpap_usage_hours) OVER (ORDER BY health_date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) AS cpap_hours_avg_30d,
+  AVG(cpap_ahi) OVER (ORDER BY health_date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) AS cpap_ahi_avg_30d
+FROM streak_groups

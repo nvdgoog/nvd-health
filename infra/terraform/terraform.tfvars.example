@@ -1,0 +1,10 @@
+project_id              = "house-tully-310623"
+region                  = "us-central1"
+bq_location             = "US"
+gcs_raw_bucket          = "nvd-health-raw-data"
+gemini_model            = "gemini-4-hydrogen"
+default_cpap_start_date = "2026-10-13"
+authorized_invokers = [
+  "user:admin@ndy.altostrat.com"
+]
+enable_iap_lb = false

@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nvd-health-platform"
+version = "0.1.0"
+description = "Personal Health Data Engineering, Analytics & AI Interrogation Platform"
+requires-python = ">=3.9"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["../tests"]

@@ -1,0 +1,162 @@
+config {
+  type: "view",
+  schema: dataform.projectConfig.vars.gold_dataset,
+  name: "v_sleep_doctor_weekly_summary",
+  description: "Clinical summary view covering the most recent 7 days of CPAP & Google Health metrics alongside rolling 30-day and Best-30 adherence windows."
+}
+
+WITH
+  anchor AS (
+    SELECT
+      COALESCE(
+        MAX(IF(cpap_usage_minutes IS NOT NULL, health_date, NULL)),
+        MAX(health_date)
+      ) AS latest_date
+    FROM ${ref("daily_health_summary")}
+  ),
+
+  -- Compute sliding 30-day windows during CPAP era to find exact Best-30 window
+  cpap_era_days AS (
+    SELECT
+      health_date,
+      cpap_usage_minutes,
+      cpap_usage_hours,
+      cpap_ahi,
+      cpap_cai,
+      cpap_pressure,
+      cpap_p95_pressure,
+      cpap_avg_leak,
+      spo2_avg_pct,
+      spo2_min_pct,
+      resting_heart_rate,
+      hrv_rmssd_ms,
+      total_sleep_minutes,
+      deep_sleep_pct,
+      rem_sleep_pct,
+      COALESCE(cpap_usage_minutes, 0) >= 240 AS compliant_4h,
+      COALESCE(cpap_usage_minutes, 0) > 0 AS used_day
+    FROM ${ref("daily_health_summary")}
+    WHERE is_cpap_era
+  ),
+
+  rolling_30_windows AS (
+    SELECT
+      DATE_SUB(health_date, INTERVAL 29 DAY) AS window_start,
+      health_date AS window_end,
+      COUNTIF(compliant_4h) OVER (
+        ORDER BY UNIX_DATE(health_date)
+        RANGE BETWEEN 29 PRECEDING AND CURRENT ROW
+      ) AS best30_days_ge_4h,
+      COUNTIF(used_day) OVER (
+        ORDER BY UNIX_DATE(health_date)
+        RANGE BETWEEN 29 PRECEDING AND CURRENT ROW
+      ) AS best30_days_used,
+      AVG(IF(used_day, cpap_usage_hours, NULL)) OVER (
+        ORDER BY UNIX_DATE(health_date)
+        RANGE BETWEEN 29 PRECEDING AND CURRENT ROW
+      ) AS best30_avg_hours_used,
+      AVG(cpap_ahi) OVER (
+        ORDER BY UNIX_DATE(health_date)
+        RANGE BETWEEN 29 PRECEDING AND CURRENT ROW
+      ) AS best30_avg_ahi
+    FROM cpap_era_days
+  ),
+
+  best30 AS (
+    SELECT
+      window_start AS best30_start_date,
+      window_end AS best30_end_date,
+      best30_days_ge_4h,
+      best30_days_used,
+      ROUND(best30_days_ge_4h * 100.0 / 30.0, 2) AS best30_adherence_pct,
+      ROUND(best30_avg_hours_used, 2) AS best30_avg_hours_used,
+      ROUND(best30_avg_ahi, 2) AS best30_avg_ahi
+    FROM rolling_30_windows
+    ORDER BY best30_days_ge_4h DESC, best30_avg_hours_used DESC, window_end DESC
+    LIMIT 1
+  ),
+
+  last_30_summary AS (
+    SELECT
+      COUNT(*) AS l30_calendar_days,
+      COUNTIF(COALESCE(d.cpap_usage_minutes, 0) > 0) AS l30_days_used,
+      COUNTIF(COALESCE(d.cpap_usage_minutes, 0) >= 240) AS l30_days_ge_4h,
+      ROUND(COUNTIF(COALESCE(d.cpap_usage_minutes, 0) >= 240) * 100.0 / NULLIF(COUNT(*), 0), 2) AS l30_adherence_4h_pct,
+      ROUND(AVG(IF(COALESCE(d.cpap_usage_minutes, 0) > 0, d.cpap_usage_hours, NULL)), 2) AS l30_avg_hours_days_used,
+      ROUND(AVG(COALESCE(d.cpap_usage_hours, 0.0)), 2) AS l30_avg_hours_all_days,
+      ROUND(AVG(d.cpap_ahi), 2) AS l30_avg_ahi,
+      ROUND(AVG(d.cpap_cai), 2) AS l30_avg_cai,
+      ROUND(APPROX_QUANTILES(d.cpap_pressure, 100)[OFFSET(50)], 2) AS l30_median_pressure,
+      ROUND(AVG(d.cpap_p95_pressure), 2) AS l30_avg_p95_pressure,
+      ROUND(AVG(d.cpap_avg_leak), 2) AS l30_avg_leak,
+      ROUND(AVG(d.spo2_avg_pct), 2) AS l30_avg_spo2,
+      ROUND(MIN(d.spo2_min_pct), 2) AS l30_min_spo2,
+      ROUND(AVG(d.resting_heart_rate), 1) AS l30_avg_rhr,
+      ROUND(AVG(d.hrv_rmssd_ms), 1) AS l30_avg_hrv
+    FROM ${ref("daily_health_summary")} AS d
+    CROSS JOIN anchor AS a
+    WHERE d.health_date BETWEEN DATE_SUB(a.latest_date, INTERVAL 29 DAY) AND a.latest_date
+  ),
+
+  last_7_summary AS (
+    SELECT
+      COUNT(*) AS l7_calendar_days,
+      COUNTIF(COALESCE(d.cpap_usage_minutes, 0) > 0) AS l7_days_used,
+      COUNTIF(COALESCE(d.cpap_usage_minutes, 0) >= 240) AS l7_days_ge_4h,
+      ROUND(COUNTIF(COALESCE(d.cpap_usage_minutes, 0) >= 240) * 100.0 / NULLIF(COUNT(*), 0), 2) AS l7_adherence_4h_pct,
+      ROUND(AVG(IF(COALESCE(d.cpap_usage_minutes, 0) > 0, d.cpap_usage_hours, NULL)), 2) AS l7_avg_hours_days_used,
+      ROUND(AVG(COALESCE(d.cpap_usage_hours, 0.0)), 2) AS l7_avg_hours_all_days,
+      ROUND(AVG(d.cpap_ahi), 2) AS l7_avg_ahi,
+      ROUND(AVG(d.cpap_cai), 2) AS l7_avg_cai,
+      ROUND(APPROX_QUANTILES(d.cpap_pressure, 100)[OFFSET(50)], 2) AS l7_median_pressure,
+      ROUND(AVG(d.cpap_p95_pressure), 2) AS l7_avg_p95_pressure,
+      ROUND(AVG(d.cpap_avg_leak), 2) AS l7_avg_leak,
+      ROUND(AVG(d.spo2_avg_pct), 2) AS l7_avg_spo2,
+      ROUND(MIN(d.spo2_min_pct), 2) AS l7_min_spo2,
+      ROUND(AVG(d.resting_heart_rate), 1) AS l7_avg_rhr,
+      ROUND(AVG(d.hrv_rmssd_ms), 1) AS l7_avg_hrv,
+      ROUND(AVG(d.total_sleep_minutes / 60.0), 2) AS l7_avg_sleep_hours,
+      ROUND(AVG(d.deep_sleep_pct), 1) AS l7_avg_deep_pct,
+      ROUND(AVG(d.rem_sleep_pct), 1) AS l7_avg_rem_pct
+    FROM ${ref("daily_health_summary")} AS d
+    CROSS JOIN anchor AS a
+    WHERE d.health_date BETWEEN DATE_SUB(a.latest_date, INTERVAL 6 DAY) AND a.latest_date
+  )
+
+SELECT
+  d.health_date,
+  a.latest_date AS window_end_date,
+  d.cpap_start_date,
+  d.cpap_device_sn,
+  d.cpap_mode,
+  d.cpap_usage_duration_str,
+  d.cpap_usage_minutes,
+  d.cpap_usage_hours,
+  d.cpap_compliant_4h,
+  d.cpap_pressure,
+  d.cpap_p95_pressure,
+  d.cpap_ahi,
+  d.cpap_cai,
+  d.cpap_avg_leak,
+  d.total_sleep_minutes,
+  ROUND(d.total_sleep_minutes / 60.0, 2) AS total_sleep_hours,
+  d.deep_sleep_pct,
+  d.rem_sleep_pct,
+  d.sleep_overall_score,
+  d.spo2_avg_pct,
+  d.spo2_min_pct,
+  d.nocturnal_spo2_avg,
+  d.nocturnal_spo2_min,
+  d.resting_heart_rate,
+  d.hrv_rmssd_ms,
+  d.nocturnal_hr_avg,
+  l7.*,
+  l30.*,
+  b30.*
+FROM ${ref("daily_health_summary")} AS d
+CROSS JOIN anchor AS a
+CROSS JOIN last_7_summary AS l7
+CROSS JOIN last_30_summary AS l30
+LEFT JOIN best30 AS b30 ON TRUE
+WHERE d.health_date BETWEEN DATE_SUB(a.latest_date, INTERVAL 6 DAY) AND a.latest_date
+ORDER BY d.health_date DESC

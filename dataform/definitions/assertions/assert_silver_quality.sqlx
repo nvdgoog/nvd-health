@@ -1,0 +1,23 @@
+config {
+  type: "assertion",
+  schema: dataform.projectConfig.vars.silver_dataset,
+  name: "assert_silver_quality",
+  description: "Verify no -1 sentinels remain in Silver sleep sub-scores and CPAP hours align with minutes."
+}
+
+SELECT
+  health_date,
+  sleep_duration_score,
+  sleep_composition_score,
+  sleep_revitalization_score,
+  cpap_usage_minutes,
+  cpap_usage_hours
+FROM ${ref("daily_health_summary")}
+WHERE
+  sleep_duration_score = -1
+  OR sleep_composition_score = -1
+  OR sleep_revitalization_score = -1
+  OR (
+    cpap_usage_minutes IS NOT NULL
+    AND ABS(COALESCE(cpap_usage_hours, 0.0) - (cpap_usage_minutes / 60.0)) > 0.02
+  )
