@@ -6,7 +6,12 @@ import unittest
 from app.agent.sql_tools import validate_readonly_sql
 from app.etl.bq_loader import build_merge_sql
 from app.etl.registry import ConnectorRegistry
-from app.etl.schemas import CORE_HEALTH_TABLES, SYSTEM_TABLES, infer_google_takeout_family
+from app.etl.schemas import (
+    CORE_HEALTH_TABLES,
+    SYSTEM_TABLES,
+    infer_google_takeout_family,
+    normalize_logical_path,
+)
 
 
 class TestRegistrySqlAndDataform(unittest.TestCase):
@@ -134,6 +139,13 @@ class TestRegistrySqlAndDataform(unittest.TestCase):
         )
         self.assertIn("report_generated_date", cpap_sql)
         self.assertIn("`_ingested_at` DESC NULLS LAST", cpap_sql)
+
+    def test_normalize_logical_path_across_upload_batches(self) -> None:
+        root_p = "Physical Activity_GoogleData/Heart Rate/heart_rate_2025-01-10.csv"
+        zip_p = "uploads/google_takeout/unzipped/run-20261201-0001/Physical Activity_GoogleData/Heart Rate/heart_rate_2025-01-10.csv"
+        folder_p = "uploads/google_takeout/folders/2026-12-01T00-00-00Z/Takeout/Physical Activity_GoogleData/Heart Rate/heart_rate_2025-01-10.csv"
+        self.assertEqual(normalize_logical_path(root_p), normalize_logical_path(zip_p))
+        self.assertEqual(normalize_logical_path(root_p), normalize_logical_path(folder_p))
 
 
 if __name__ == "__main__":

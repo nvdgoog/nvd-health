@@ -19,7 +19,7 @@ from app.config import Settings, get_settings
 from app.etl.bq_loader import BigQueryBronzeLoader
 from app.etl.dataform_runner import DataformRunner
 from app.etl.registry import ConnectorRegistry, ParsedBatchItem
-from app.etl.schemas import SYSTEM_TABLES, TableSchemaSpec
+from app.etl.schemas import SYSTEM_TABLES, TableSchemaSpec, normalize_logical_path
 
 DEFAULT_SCAN_PREFIXES = [
     "Health Fitness Data_GoogleData/",
@@ -30,8 +30,8 @@ DEFAULT_SCAN_PREFIXES = [
 
 # Bounded chunk & flush limit (disk-backed NDJSON + 8Gi RAM safely handles 100k-row batches)
 BATCH_ROW_FLUSH_LIMIT = 100000
-PREFETCH_WINDOW_SIZE = 40
-CHECKPOINT_FILE_INTERVAL = 100
+PREFETCH_WINDOW_SIZE = 50
+CHECKPOINT_FILE_INTERVAL = 400
 
 
 def utc_now_iso() -> str:
@@ -150,6 +150,11 @@ class HealthEtlRunner:
             self._record_run(run_state)
 
             ledger_hashes = {} if force_reload else self.loader.fetch_ledger_hashes()
+            logical_hash_pairs: Set[Tuple[str, str]] = {
+                (normalize_logical_path(fp), h)
+                for fp, h in ledger_hashes.items()
+                if h
+            }
 
             # Group pending rows by target Bronze table to execute 1 MERGE per table per batch
             pending_rows: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
@@ -196,7 +201,11 @@ class HealthEtlRunner:
                     run_state["files_skipped"] += 1
                     continue
                 blob_hash = blob.md5_hash or blob.crc32c or str(blob.etag or "")
-                if not force_reload and ledger_hashes.get(blob_path) == blob_hash:
+                logical_key = (normalize_logical_path(blob_path), blob_hash)
+                if not force_reload and (
+                    ledger_hashes.get(blob_path) == blob_hash
+                    or (blob_hash and logical_key in logical_hash_pairs)
+                ):
                     run_state["files_scanned"] += 1
                     run_state["files_skipped"] += 1
                     continue

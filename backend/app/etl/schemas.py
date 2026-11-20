@@ -753,3 +753,21 @@ def get_spec_for_google_family(family: str) -> TableSchemaSpec:
         allow_schema_evolution=True,
         description=f"Auto-discovered Google Health Takeout table for {family}.",
     )
+
+
+_UPLOAD_BATCH_PREFIX_RE = re.compile(
+    r"^uploads/(?:google_takeout/(?:zips|folders|unzipped)|reacthealth_pdf|transcend_micro|zenplanner)/[^/]+/",
+    re.IGNORECASE,
+)
+
+
+def normalize_logical_path(blob_path: str) -> str:
+    """
+    Strip upload batch/run prefixes and optional 'Takeout/' wrapper so identical
+    historical Takeout shards uploaded in future batches match the ingestion ledger.
+    """
+    cleaned = blob_path.lstrip("/")
+    cleaned = _UPLOAD_BATCH_PREFIX_RE.sub("", cleaned)
+    if cleaned.lower().startswith("takeout/"):
+        cleaned = cleaned[len("takeout/") :]
+    return cleaned.strip().lower()
