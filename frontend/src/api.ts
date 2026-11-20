@@ -41,6 +41,7 @@ export interface DailyPerformanceRow {
   breathing_quality?: string | null;
   skin_temp_deviation_celsius?: number | null;
   readiness_score?: number | null;
+  sleep_restoration_pct?: number | null;
   stress_score?: number | null;
   steps?: number | null;
   active_zone_minutes?: number | null;

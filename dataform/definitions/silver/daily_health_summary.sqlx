@@ -171,7 +171,7 @@ WITH
       waso_count_long_wakes,
       waso_count_all_wake_time,
       restlessness_normalized,
-      hr_below_resting_hr
+      IF(hr_below_resting_hr >= 0, hr_below_resting_hr, NULL) AS hr_below_resting_hr
     FROM ${ref("google_user_sleep_scores")}
     QUALIFY ROW_NUMBER() OVER (
       PARTITION BY sleep_id
@@ -582,6 +582,11 @@ SELECT
   sc.waso_count_all_wake_time,
   sc.restlessness_normalized,
   sc.hr_below_resting_hr,
+  CASE
+    WHEN sc.hr_below_resting_hr IS NULL THEN NULL
+    WHEN sc.hr_below_resting_hr <= 1.0 THEN ROUND(sc.hr_below_resting_hr * 100.0, 1)
+    ELSE ROUND(sc.hr_below_resting_hr, 1)
+  END AS sleep_restoration_pct,
 
   -- Cardiovascular, Recovery, Oxygenation & Stress
   COALESCE(rhr.resting_heart_rate, sc.sleep_score_rhr) AS resting_heart_rate,

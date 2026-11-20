@@ -127,7 +127,7 @@ const IMPACT_LABELS: Record<
   total_sleep_hours: { label: "Total Sleep", unit: "h", higherIsBetter: true },
   respiratory_rate_bpm: { label: "Resp Rate", unit: " br/m", higherIsBetter: false },
   readiness_score: { label: "Readiness", unit: "", higherIsBetter: true },
-  stress_score: { label: "Stress Score", unit: "", higherIsBetter: true },
+  sleep_restoration_pct: { label: "Sleep Restoration", unit: "%", higherIsBetter: true },
 };
 
 const CORR_OPTIONS = [
@@ -135,7 +135,7 @@ const CORR_OPTIONS = [
   { key: "steps", label: "Daily Steps" },
   { key: "calories_burned", label: "Calories Burned" },
   { key: "cardio_acwr", label: "Cardio ACWR" },
-  { key: "stress_score", label: "Stress Score" },
+  { key: "sleep_restoration_pct", label: "Sleep Restoration (%)" },
   { key: "readiness_score", label: "Readiness Score" },
   { key: "sleep_overall_score", label: "Sleep Score" },
   { key: "hrv_rmssd_ms", label: "HRV (RMSSD ms)" },
@@ -717,7 +717,7 @@ export const DashboardPage: React.FC = () => {
           {/* Recovery & Readiness Trends */}
           <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-3">
             <h3 className="text-sm font-semibold">
-              Readiness, Stress Score &amp; Respiratory Rate Trend
+              Readiness, Sleep Restoration &amp; Respiratory Rate Trend
             </h3>
             <div className="h-72 w-full">
               <ResponsiveContainer width="100%" height="100%">
@@ -748,8 +748,8 @@ export const DashboardPage: React.FC = () => {
                   <Line
                     yAxisId="left"
                     type="monotone"
-                    dataKey="stress_score"
-                    name="Stress Score"
+                    dataKey="sleep_restoration_pct"
+                    name="Sleep Restoration (%)"
                     stroke="#f59e0b"
                     dot={false}
                     strokeWidth={2}

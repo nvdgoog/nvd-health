@@ -17,7 +17,7 @@ CORRELATION_WHITELIST = {
     "active_zone_minutes": "active_zone_minutes",
     "calories_burned": "calories_burned",
     "cardio_acwr": "cardio_acwr",
-    "stress_score": "stress_score",
+    "sleep_restoration_pct": "sleep_restoration_pct",
     "readiness_score": "readiness_score",
     "sleep_overall_score": "sleep_overall_score",
     "hrv_rmssd_ms": "hrv_rmssd_ms",
