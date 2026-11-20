@@ -39,16 +39,37 @@ gcloud storage buckets update "gs://${BUCKET}" \
   --cors-file=infra/gcs-cors.json \
   --project="${PROJECT_ID}"
 
-echo "==> 4. Applying Terraform infrastructure"
+echo "==> 4. Applying Terraform infrastructure (with gcloud fallback if Cloud Shell IPv6 fails)"
 pushd infra/terraform >/dev/null
-terraform init -upgrade
-if ! terraform state show google_artifact_registry_repository.repo >/dev/null 2>&1; then
+TERRAFORM_OK=true
+if ! terraform init -upgrade; then
+  TERRAFORM_OK=false
+fi
+if [ "${TERRAFORM_OK}" = "true" ] && ! terraform state show google_artifact_registry_repository.repo >/dev/null 2>&1; then
   if gcloud artifacts repositories describe nvd-health --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
     terraform import -var="container_image=${IMAGE}" google_artifact_registry_repository.repo "projects/${PROJECT_ID}/locations/${REGION}/repositories/nvd-health" || true
   fi
 fi
-terraform apply -var="container_image=${IMAGE}" -auto-approve
+if [ "${TERRAFORM_OK}" = "true" ]; then
+  if ! terraform apply -var="container_image=${IMAGE}" -auto-approve; then
+    TERRAFORM_OK=false
+  fi
+fi
 popd >/dev/null
+
+if [ "${TERRAFORM_OK}" != "true" ]; then
+  echo "WARNING: Terraform failed (e.g. Cloud Shell IPv6 issue). Updating Cloud Run directly via gcloud..."
+  gcloud run services update nvd-health-web \
+    --project="${PROJECT_ID}" \
+    --region="${REGION}" \
+    --image="${IMAGE}" \
+    --update-env-vars="GOOGLE_SHEET_ID=17SgQVoT53xm5299WKZHsIW5PgLInuszCSfeLu50Zsvc"
+  gcloud run jobs update nvd-health-etl-job \
+    --project="${PROJECT_ID}" \
+    --region="${REGION}" \
+    --image="${IMAGE}" \
+    --update-env-vars="GOOGLE_SHEET_ID=17SgQVoT53xm5299WKZHsIW5PgLInuszCSfeLu50Zsvc"
+fi
 
 echo "==> 5. Syncing Dataform workspace files"
 PYTHONPATH=backend python3 scripts/sync_dataform.py --compile-only

@@ -121,9 +121,46 @@ def get_habits_impact() -> Dict[str, Any]:
     settings = get_settings()
     client = _bq_client()
     silver_fqn = f"{settings.gcp_project_id}.{settings.bq_dataset_silver}"
+    bronze_fqn = f"{settings.gcp_project_id}.{settings.bq_dataset_bronze}"
     tbl_fqn = f"{silver_fqn}.daily_health_summary"
     if not _table_exists(client, tbl_fqn):
-        return {"habits": []}
+        return {"habits": [], "baseline_notes": []}
+
+    habit_defs = [
+        ("crossfit", "CrossFit WOD", "COALESCE(has_crossfit_wod, FALSE)"),
+        ("cold_plunge", "Cold Plunge", "COALESCE(has_cold_plunge, FALSE)"),
+        ("dry_sauna", "Dry Sauna", "COALESCE(has_dry_sauna, FALSE)"),
+        ("alcohol", "Alcohol Logged", "COALESCE(has_alcohol, FALSE)"),
+        ("late_dinner", "Late Dinner", "COALESCE(has_late_dinner, FALSE)"),
+        ("nap", "Daytime Nap", "COALESCE(has_daytime_nap, FALSE)"),
+        ("coffee_3plus", "Coffee 3+ Cups", "COALESCE(morning_coffee_cups, 0) >= 3"),
+    ]
+
+    union_queries = []
+    for key, label, cond in habit_defs:
+        union_queries.append(
+            f"""
+            SELECT
+              '{key}' AS habit_key,
+              '{label}' AS habit,
+              COUNTIF({cond}) AS active_days,
+              ROUND(AVG(IF({cond}, sleep_overall_score, NULL)), 1) AS active_sleep_score,
+              ROUND(AVG(IF(NOT ({cond}), sleep_overall_score, NULL)), 1) AS other_sleep_score,
+              ROUND(AVG(IF({cond}, deep_sleep_pct, NULL)), 1) AS active_deep_pct,
+              ROUND(AVG(IF(NOT ({cond}), deep_sleep_pct, NULL)), 1) AS other_deep_pct,
+              ROUND(AVG(IF({cond}, hrv_rmssd_ms, NULL)), 1) AS active_hrv,
+              ROUND(AVG(IF(NOT ({cond}), hrv_rmssd_ms, NULL)), 1) AS other_hrv,
+              ROUND(AVG(IF({cond}, resting_heart_rate, NULL)), 1) AS active_rhr,
+              ROUND(AVG(IF(NOT ({cond}), resting_heart_rate, NULL)), 1) AS other_rhr,
+              ROUND(AVG(IF({cond}, readiness_score, NULL)), 1) AS active_readiness,
+              ROUND(AVG(IF(NOT ({cond}), readiness_score, NULL)), 1) AS other_readiness,
+              ROUND(AVG(IF({cond}, cpap_ahi, NULL)), 2) AS active_ahi,
+              ROUND(AVG(IF(NOT ({cond}), cpap_ahi, NULL)), 2) AS other_ahi,
+              ROUND(AVG(IF({cond}, spo2_min_pct, NULL)), 1) AS active_spo2_min,
+              ROUND(AVG(IF(NOT ({cond}), spo2_min_pct, NULL)), 1) AS other_spo2_min
+            FROM tagged
+            """.strip()
+        )
 
     sql = f"""
     WITH tagged AS (
@@ -131,48 +168,44 @@ def get_habits_impact() -> Dict[str, Any]:
         health_date,
         sleep_overall_score,
         deep_sleep_pct,
-        rem_sleep_pct,
         hrv_rmssd_ms,
         resting_heart_rate,
+        readiness_score,
         cpap_ahi,
+        spo2_min_pct,
+        morning_coffee_cups,
         has_crossfit_wod,
         has_cold_plunge,
-        has_dry_sauna
+        has_dry_sauna,
+        has_alcohol,
+        has_daytime_nap,
+        has_late_dinner
       FROM `{tbl_fqn}`
       WHERE activity_notes IS NOT NULL
+         OR wake_up_observations IS NOT NULL
+         OR morning_coffee_cups IS NOT NULL
     )
-    SELECT 'CrossFit WOD' AS habit, COUNTIF(has_crossfit_wod) AS active_days,
-      ROUND(AVG(IF(has_crossfit_wod, sleep_overall_score, NULL)), 1) AS active_sleep_score,
-      ROUND(AVG(IF(NOT COALESCE(has_crossfit_wod, FALSE), sleep_overall_score, NULL)), 1) AS other_sleep_score,
-      ROUND(AVG(IF(has_crossfit_wod, deep_sleep_pct, NULL)), 1) AS active_deep_pct,
-      ROUND(AVG(IF(NOT COALESCE(has_crossfit_wod, FALSE), deep_sleep_pct, NULL)), 1) AS other_deep_pct,
-      ROUND(AVG(IF(has_crossfit_wod, hrv_rmssd_ms, NULL)), 1) AS active_hrv,
-      ROUND(AVG(IF(NOT COALESCE(has_crossfit_wod, FALSE), hrv_rmssd_ms, NULL)), 1) AS other_hrv
-    FROM tagged
-    UNION ALL
-    SELECT 'Cold Plunge' AS habit, COUNTIF(has_cold_plunge) AS active_days,
-      ROUND(AVG(IF(has_cold_plunge, sleep_overall_score, NULL)), 1),
-      ROUND(AVG(IF(NOT COALESCE(has_cold_plunge, FALSE), sleep_overall_score, NULL)), 1),
-      ROUND(AVG(IF(has_cold_plunge, deep_sleep_pct, NULL)), 1),
-      ROUND(AVG(IF(NOT COALESCE(has_cold_plunge, FALSE), deep_sleep_pct, NULL)), 1),
-      ROUND(AVG(IF(has_cold_plunge, hrv_rmssd_ms, NULL)), 1),
-      ROUND(AVG(IF(NOT COALESCE(has_cold_plunge, FALSE), hrv_rmssd_ms, NULL)), 1)
-    FROM tagged
-    UNION ALL
-    SELECT 'Dry Sauna' AS habit, COUNTIF(has_dry_sauna) AS active_days,
-      ROUND(AVG(IF(has_dry_sauna, sleep_overall_score, NULL)), 1),
-      ROUND(AVG(IF(NOT COALESCE(has_dry_sauna, FALSE), sleep_overall_score, NULL)), 1),
-      ROUND(AVG(IF(has_dry_sauna, deep_sleep_pct, NULL)), 1),
-      ROUND(AVG(IF(NOT COALESCE(has_dry_sauna, FALSE), deep_sleep_pct, NULL)), 1),
-      ROUND(AVG(IF(has_dry_sauna, hrv_rmssd_ms, NULL)), 1),
-      ROUND(AVG(IF(NOT COALESCE(has_dry_sauna, FALSE), hrv_rmssd_ms, NULL)), 1)
-    FROM tagged
+    {" UNION ALL ".join(union_queries)}
     """
     try:
         rows = [dict(r.items()) for r in client.query(sql).result()]
     except Exception:
         rows = []
-    return {"habits": rows}
+
+    baseline_notes: List[Dict[str, Any]] = []
+    notes_fqn = f"{bronze_fqn}.bronze_journal_baseline_notes"
+    if _table_exists(client, notes_fqn):
+        try:
+            notes_sql = f"""
+            SELECT note_category, note_text
+            FROM `{notes_fqn}`
+            ORDER BY note_category, note_id
+            """
+            baseline_notes = [dict(r.items()) for r in client.query(notes_sql).result()]
+        except Exception:
+            baseline_notes = []
+
+    return {"habits": rows, "baseline_notes": baseline_notes}
 
 
 @router.get("/dashboard/correlations")

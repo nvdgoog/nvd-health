@@ -472,7 +472,11 @@ WITH
       wake_up_observations,
       REGEXP_CONTAINS(LOWER(COALESCE(activity_notes, '')), r'crossfit') AS has_crossfit_wod,
       REGEXP_CONTAINS(LOWER(COALESCE(activity_notes, '')), r'cold plunge') AS has_cold_plunge,
-      REGEXP_CONTAINS(LOWER(COALESCE(activity_notes, '')), r'sauna') AS has_dry_sauna
+      REGEXP_CONTAINS(LOWER(COALESCE(activity_notes, '')), r'sauna') AS has_dry_sauna,
+      REGEXP_CONTAINS(LOWER(CONCAT(COALESCE(activity_notes, ''), ' ', COALESCE(wake_up_observations, ''))), r'alcohol') AS has_alcohol,
+      REGEXP_CONTAINS(LOWER(COALESCE(activity_notes, '')), r'\bnap\b') AS has_daytime_nap,
+      REGEXP_CONTAINS(LOWER(CONCAT(COALESCE(activity_notes, ''), ' ', COALESCE(wake_up_observations, ''))), r'late dinner|ate late|finished dinner.*late') AS has_late_dinner,
+      REGEXP_CONTAINS(LOWER(CONCAT(COALESCE(activity_notes, ''), ' ', COALESCE(wake_up_observations, ''))), r'travel') AS has_travel_day
     FROM ${ref("bronze_journal_daily_observations")}
     WHERE observation_date IS NOT NULL
     QUALIFY ROW_NUMBER() OVER (
@@ -656,7 +660,11 @@ SELECT
   jrn.wake_up_observations,
   jrn.has_crossfit_wod,
   jrn.has_cold_plunge,
-  jrn.has_dry_sauna
+  jrn.has_dry_sauna,
+  jrn.has_alcohol,
+  jrn.has_daytime_nap,
+  jrn.has_late_dinner,
+  jrn.has_travel_day
 FROM date_spine AS ds
 CROSS JOIN cpap_config AS cfg
 LEFT JOIN daily_cpap AS cpap USING (health_date)

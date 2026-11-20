@@ -1,9 +1,14 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Activity,
+  BookOpen,
   Calendar,
+  ChevronDown,
+  ChevronUp,
+  Coffee,
   HeartPulse,
   Moon,
+  Search,
   SlidersHorizontal,
   TrendingDown,
   TrendingUp,
@@ -24,9 +29,80 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { api, type CpapImpactMetric, type DailyPerformanceRow } from "../api";
+import {
+  api,
+  type BaselineNoteRow,
+  type CpapImpactMetric,
+  type DailyPerformanceRow,
+  type HabitImpactRow,
+} from "../api";
 import { IntradayDrawer } from "../components/IntradayDrawer";
 import { ModularExtensionWidgets } from "../components/ModularWidgets";
+
+interface JournalTooltipProps {
+  active?: boolean;
+  label?: string | number;
+  payload?: Array<{
+    name?: string;
+    value?: number | string | null;
+    color?: string;
+    payload?: DailyPerformanceRow;
+  }>;
+}
+
+const JournalAwareTooltip: React.FC<JournalTooltipProps> = ({
+  active,
+  label,
+  payload,
+}) => {
+  if (!active || !payload || payload.length === 0) return null;
+  const row = payload[0]?.payload;
+  return (
+    <div className="max-w-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-slate-900/95 px-3 py-2.5 shadow-lg text-[11px] space-y-1.5 backdrop-blur">
+      <div className="font-mono font-semibold text-slate-900 dark:text-white border-b border-slate-100 dark:border-slate-800 pb-1">
+        {String(label || row?.health_date || "")}
+      </div>
+      <div className="space-y-0.5">
+        {payload.map((entry, idx) => (
+          <div key={idx} className="flex items-center justify-between gap-3">
+            <span className="flex items-center gap-1.5 text-slate-600 dark:text-slate-300">
+              <span
+                className="w-2 h-2 rounded-full shrink-0"
+                style={{ backgroundColor: entry.color || "#0284c7" }}
+              />
+              {entry.name}:
+            </span>
+            <span className="font-semibold text-slate-900 dark:text-white">
+              {entry.value != null ? String(entry.value) : "—"}
+            </span>
+          </div>
+        ))}
+      </div>
+      {row &&
+        (row.activity_notes ||
+          row.morning_coffee_cups != null ||
+          row.wake_up_observations) && (
+          <div className="border-t border-slate-100 dark:border-slate-800 pt-1.5 space-y-0.5 text-[10px]">
+            {row.morning_coffee_cups != null && (
+              <div className="text-amber-700 dark:text-amber-300">
+                <b>Coffee:</b> {row.morning_coffee_cups} cups
+              </div>
+            )}
+            {row.activity_notes && (
+              <div className="text-sky-700 dark:text-sky-300 line-clamp-2">
+                <b>Activities:</b> {row.activity_notes}
+              </div>
+            )}
+            {row.wake_up_observations && (
+              <div className="text-slate-500 dark:text-slate-400 line-clamp-2">
+                <b>Wake-up:</b> {row.wake_up_observations}
+              </div>
+            )}
+          </div>
+        )}
+    </div>
+  );
+};
 
 type RangePreset = "7D" | "30D" | "90D" | "YTD" | "ALL" | "CUSTOM";
 
@@ -75,18 +151,11 @@ export const DashboardPage: React.FC = () => {
   const [allDays, setAllDays] = useState<DailyPerformanceRow[]>([]);
   const [cpapStartDate, setCpapStartDate] = useState("2026-10-13");
   const [impactMetrics, setImpactMetrics] = useState<CpapImpactMetric[]>([]);
-  const [habitsImpact, setHabitsImpact] = useState<
-    Array<{
-      habit: string;
-      active_days: number;
-      active_sleep_score: number | null;
-      other_sleep_score: number | null;
-      active_deep_pct: number | null;
-      other_deep_pct: number | null;
-      active_hrv: number | null;
-      other_hrv: number | null;
-    }>
-  >([]);
+  const [habitsImpact, setHabitsImpact] = useState<HabitImpactRow[]>([]);
+  const [baselineNotes, setBaselineNotes] = useState<BaselineNoteRow[]>([]);
+  const [showBaseline, setShowBaseline] = useState(false);
+  const [journalQuery, setJournalQuery] = useState("");
+  const [journalFilter, setJournalFilter] = useState<string>("all");
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
@@ -113,6 +182,7 @@ export const DashboardPage: React.FC = () => {
         setCpapStartDate(ov.cpap_start_date);
         setImpactMetrics(imp.metrics);
         setHabitsImpact(hab.habits);
+        setBaselineNotes(hab.baseline_notes || []);
       })
       .finally(() => setLoading(false));
   }, []);
@@ -169,6 +239,37 @@ export const DashboardPage: React.FC = () => {
       ),
     [filteredDays, cpapStartDate]
   );
+
+  const journalRows = useMemo(() => {
+    const q = journalQuery.trim().toLowerCase();
+    return [...filteredDays]
+      .filter(
+        (d) =>
+          Boolean(d.activity_notes) ||
+          Boolean(d.wake_up_observations) ||
+          d.morning_coffee_cups != null
+      )
+      .filter((d) => {
+        if (journalFilter === "crossfit") return Boolean(d.has_crossfit_wod);
+        if (journalFilter === "cold_plunge") return Boolean(d.has_cold_plunge);
+        if (journalFilter === "dry_sauna") return Boolean(d.has_dry_sauna);
+        if (journalFilter === "alcohol") return Boolean(d.has_alcohol);
+        if (journalFilter === "late_dinner") return Boolean(d.has_late_dinner);
+        if (journalFilter === "nap") return Boolean(d.has_daytime_nap);
+        if (journalFilter === "coffee_3plus")
+          return (d.morning_coffee_cups ?? 0) >= 3;
+        return true;
+      })
+      .filter((d) => {
+        if (!q) return true;
+        return (
+          d.health_date.toLowerCase().includes(q) ||
+          (d.activity_notes || "").toLowerCase().includes(q) ||
+          (d.wake_up_observations || "").toLowerCase().includes(q)
+        );
+      })
+      .reverse();
+  }, [filteredDays, journalFilter, journalQuery]);
 
   const breathingContext = impactMetrics[0];
 
@@ -355,7 +456,7 @@ export const DashboardPage: React.FC = () => {
                     domain={[85, 100]}
                     tick={{ fontSize: 11 }}
                   />
-                  <Tooltip />
+                  <Tooltip content={<JournalAwareTooltip />} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   {showCpapMarker && (
                     <ReferenceLine
@@ -419,7 +520,7 @@ export const DashboardPage: React.FC = () => {
                   <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.2} />
                   <XAxis dataKey="health_date" tick={{ fontSize: 10 }} />
                   <YAxis tick={{ fontSize: 11 }} unit="h" />
-                  <Tooltip />
+                  <Tooltip content={<JournalAwareTooltip />} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <ReferenceLine
                     y={4}
@@ -475,7 +576,7 @@ export const DashboardPage: React.FC = () => {
                   <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.2} />
                   <XAxis dataKey="health_date" tick={{ fontSize: 10 }} />
                   <YAxis tick={{ fontSize: 11 }} unit="m" />
-                  <Tooltip />
+                  <Tooltip content={<JournalAwareTooltip />} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <Bar dataKey="deep_sleep_minutes" stackId="a" name="Deep" fill="#1d4ed8" />
                   <Bar dataKey="rem_sleep_minutes" stackId="a" name="REM" fill="#7c3aed" />
@@ -509,7 +610,7 @@ export const DashboardPage: React.FC = () => {
                   <XAxis dataKey="health_date" tick={{ fontSize: 10 }} />
                   <YAxis yAxisId="left" tick={{ fontSize: 11 }} />
                   <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} />
-                  <Tooltip />
+                  <Tooltip content={<JournalAwareTooltip />} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <Bar yAxisId="left" dataKey="cpap_ahi" name="AHI" fill="#ef4444" />
                   <Bar yAxisId="left" dataKey="cpap_cai" name="CAI" fill="#f97316" />
@@ -619,7 +720,7 @@ export const DashboardPage: React.FC = () => {
                   <XAxis dataKey="health_date" tick={{ fontSize: 10 }} />
                   <YAxis yAxisId="left" tick={{ fontSize: 11 }} />
                   <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} />
-                  <Tooltip />
+                  <Tooltip content={<JournalAwareTooltip />} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   {showCpapMarker && (
                     <ReferenceLine
@@ -663,49 +764,275 @@ export const DashboardPage: React.FC = () => {
         </section>
       )}
 
-      {/* Section 5: Journal Habits Impact + Extensible Modular Widgets */}
-      {habitsImpact.some((h) => h.active_days > 0) && (
-        <section className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-3">
-          <div>
-            <h3 className="text-sm font-semibold">
-              Daily Activities &amp; Habits Impact (From Google Sheet Journal)
-            </h3>
-            <p className="text-xs text-slate-500">
-              Comparing nights following each logged activity against non-activity nights (click any chart date to read your wake-up notes)
-            </p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {habitsImpact.map((h) => (
-              <div
-                key={h.habit}
-                className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/50 p-4 text-xs space-y-1.5"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-sm">{h.habit}</span>
-                  <span className="px-2 py-0.5 rounded-full bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300 font-medium">
-                    {h.active_days} nights
-                  </span>
+      {/* Section 5: Journal Habits Impact, Baseline Protocol & Searchable Activity Log */}
+      {(habitsImpact.some((h) => h.active_days > 0) ||
+        baselineNotes.length > 0 ||
+        journalRows.length > 0 ||
+        journalQuery !== "" ||
+        journalFilter !== "all") && (
+        <section className="space-y-5">
+          {habitsImpact.some((h) => h.active_days > 0) && (
+            <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-semibold">
+                    Daily Activities &amp; Habits Impact (From Google Sheet Journal)
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Comparing logged habit/trigger nights vs. non-habit nights across sleep, autonomic recovery, and CPAP AHI. Click any card to filter the journal table below.
+                  </p>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Sleep Score:</span>
-                  <span>
-                    <b>{h.active_sleep_score ?? "—"}</b> vs. {h.other_sleep_score ?? "—"}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Deep Sleep %:</span>
-                  <span>
-                    <b>{h.active_deep_pct ?? "—"}%</b> vs. {h.other_deep_pct ?? "—"}%
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">HRV (RMSSD):</span>
-                  <span>
-                    <b>{h.active_hrv ?? "—"} ms</b> vs. {h.other_hrv ?? "—"} ms
-                  </span>
-                </div>
+                {baselineNotes.length > 0 && (
+                  <button
+                    onClick={() => setShowBaseline((v) => !v)}
+                    className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 font-medium"
+                  >
+                    <BookOpen className="w-3.5 h-3.5 text-indigo-600" />
+                    Baseline Routines ({baselineNotes.length})
+                    {showBaseline ? (
+                      <ChevronUp className="w-3.5 h-3.5" />
+                    ) : (
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+                )}
               </div>
-            ))}
+
+              {showBaseline && baselineNotes.length > 0 && (
+                <div className="rounded-xl border border-indigo-200/80 dark:border-indigo-900/60 bg-indigo-50/50 dark:bg-indigo-950/20 p-3.5">
+                  <div className="text-[11px] font-semibold text-indigo-900 dark:text-indigo-200 mb-2">
+                    Active Baseline Protocol &amp; Regular Routines (Notes Tab)
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {baselineNotes.map((n, idx) => (
+                      <span
+                        key={idx}
+                        className="inline-block rounded-lg bg-white dark:bg-slate-900 border border-indigo-100 dark:border-indigo-900/60 px-2.5 py-1 text-[11px] text-slate-700 dark:text-slate-200"
+                      >
+                        {n.note_text}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3.5">
+                {habitsImpact
+                  .filter((h) => h.active_days > 0)
+                  .map((h) => {
+                    const selected = journalFilter === h.habit_key;
+                    const rows: Array<{
+                      label: string;
+                      a: number | null;
+                      b: number | null;
+                      unit: string;
+                      higherBetter: boolean;
+                    }> = [
+                      {
+                        label: "Sleep Score",
+                        a: h.active_sleep_score,
+                        b: h.other_sleep_score,
+                        unit: "",
+                        higherBetter: true,
+                      },
+                      {
+                        label: "Deep Sleep %",
+                        a: h.active_deep_pct,
+                        b: h.other_deep_pct,
+                        unit: "%",
+                        higherBetter: true,
+                      },
+                      {
+                        label: "HRV (RMSSD)",
+                        a: h.active_hrv,
+                        b: h.other_hrv,
+                        unit: " ms",
+                        higherBetter: true,
+                      },
+                      {
+                        label: "Resting HR",
+                        a: h.active_rhr,
+                        b: h.other_rhr,
+                        unit: " bpm",
+                        higherBetter: false,
+                      },
+                      {
+                        label: "Readiness",
+                        a: h.active_readiness,
+                        b: h.other_readiness,
+                        unit: "",
+                        higherBetter: true,
+                      },
+                      {
+                        label: "CPAP AHI",
+                        a: h.active_ahi,
+                        b: h.other_ahi,
+                        unit: "",
+                        higherBetter: false,
+                      },
+                    ];
+                    return (
+                      <button
+                        key={h.habit_key}
+                        type="button"
+                        onClick={() =>
+                          setJournalFilter((prev) =>
+                            prev === h.habit_key ? "all" : h.habit_key
+                          )
+                        }
+                        className={`text-left rounded-xl border p-3.5 text-xs space-y-1.5 transition ${
+                          selected
+                            ? "border-sky-500 bg-sky-50/70 dark:bg-sky-950/30 ring-1 ring-sky-500"
+                            : "border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/50 hover:border-slate-300 dark:hover:border-slate-700"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2 pb-0.5">
+                          <span className="font-semibold text-sm text-slate-900 dark:text-white">
+                            {h.habit}
+                          </span>
+                          <span className="px-2 py-0.5 rounded-full bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300 font-medium">
+                            {h.active_days} nights
+                          </span>
+                        </div>
+                        {rows.map((r) => {
+                          const hasBoth = r.a != null && r.b != null;
+                          const better = hasBoth
+                            ? r.higherBetter
+                              ? (r.a as number) >= (r.b as number)
+                              : (r.a as number) <= (r.b as number)
+                            : null;
+                          return (
+                            <div
+                              key={r.label}
+                              className="flex items-center justify-between gap-2"
+                            >
+                              <span className="text-slate-500">{r.label}:</span>
+                              <span className="tabular-nums">
+                                <b
+                                  className={
+                                    better === true
+                                      ? "text-emerald-600 dark:text-emerald-400"
+                                      : better === false
+                                      ? "text-amber-600 dark:text-amber-400"
+                                      : ""
+                                  }
+                                >
+                                  {r.a != null ? `${r.a}${r.unit}` : "—"}
+                                </b>{" "}
+                                <span className="text-slate-400">
+                                  vs. {r.b != null ? `${r.b}${r.unit}` : "—"}
+                                </span>
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </button>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+
+          {/* Filterable Nightly Activity & Wake-Up Journal Table */}
+          <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold">
+                  Nightly Activity &amp; Wake-Up Journal ({journalRows.length} nights)
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Filter by keyword (e.g. &quot;groggy&quot;, &quot;stuffy&quot;, &quot;late dinner&quot;) or click any night to open intraday sleep &amp; SpO2
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={journalQuery}
+                    onChange={(e) => setJournalQuery(e.target.value)}
+                    placeholder="Search notes or date..."
+                    className="pl-8 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                  />
+                </div>
+                {journalFilter !== "all" && (
+                  <button
+                    onClick={() => setJournalFilter("all")}
+                    className="text-xs px-2.5 py-1.5 rounded-xl bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300 font-medium"
+                  >
+                    Clear filter
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {journalRows.length === 0 ? (
+              <div className="py-6 text-center text-xs text-slate-500">
+                No journal entries match your current date range or filter.
+              </div>
+            ) : (
+              <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                <table className="w-full text-xs text-left border-collapse">
+                  <thead className="sticky top-0 bg-white dark:bg-slate-900 z-10">
+                    <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500">
+                      <th className="py-2 pr-3">Date</th>
+                      <th className="py-2 pr-3">Coffee</th>
+                      <th className="py-2 pr-3 min-w-[210px]">Prior-Day Activities</th>
+                      <th className="py-2 pr-3 min-w-[240px]">Wake-Up Observations</th>
+                      <th className="py-2 pr-3 text-right">Sleep</th>
+                      <th className="py-2 pr-3 text-right">HRV</th>
+                      <th className="py-2 pr-3 text-right">RHR</th>
+                      <th className="py-2 text-right">AHI</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {journalRows.map((d) => (
+                      <tr
+                        key={d.health_date}
+                        onClick={() => setSelectedDate(d.health_date)}
+                        className="border-b border-slate-100 dark:border-slate-800/60 hover:bg-sky-50/60 dark:hover:bg-slate-800/60 cursor-pointer transition align-top"
+                      >
+                        <td className="py-2 pr-3 font-mono font-medium whitespace-nowrap">
+                          {d.health_date}
+                        </td>
+                        <td className="py-2 pr-3 whitespace-nowrap">
+                          {d.morning_coffee_cups != null ? (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300">
+                              <Coffee className="w-3 h-3" />
+                              {d.morning_coffee_cups}
+                            </span>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                        <td className="py-2 pr-3 text-slate-700 dark:text-slate-200">
+                          {d.activity_notes || "—"}
+                        </td>
+                        <td className="py-2 pr-3 text-slate-600 dark:text-slate-300">
+                          {d.wake_up_observations || "—"}
+                        </td>
+                        <td className="py-2 pr-3 text-right font-semibold tabular-nums">
+                          {d.sleep_overall_score ?? "—"}
+                        </td>
+                        <td className="py-2 pr-3 text-right tabular-nums">
+                          {d.hrv_rmssd_ms != null
+                            ? `${Math.round(d.hrv_rmssd_ms)}`
+                            : "—"}
+                        </td>
+                        <td className="py-2 pr-3 text-right tabular-nums">
+                          {d.resting_heart_rate != null
+                            ? `${Math.round(d.resting_heart_rate)}`
+                            : "—"}
+                        </td>
+                        <td className="py-2 text-right tabular-nums">
+                          {d.cpap_ahi != null ? d.cpap_ahi.toFixed(1) : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </section>
       )}

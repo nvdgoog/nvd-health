@@ -64,6 +64,35 @@ export interface DailyPerformanceRow {
   has_crossfit_wod?: boolean | null;
   has_cold_plunge?: boolean | null;
   has_dry_sauna?: boolean | null;
+  has_alcohol?: boolean | null;
+  has_daytime_nap?: boolean | null;
+  has_late_dinner?: boolean | null;
+  has_travel_day?: boolean | null;
+}
+
+export interface HabitImpactRow {
+  habit_key: string;
+  habit: string;
+  active_days: number;
+  active_sleep_score: number | null;
+  other_sleep_score: number | null;
+  active_deep_pct: number | null;
+  other_deep_pct: number | null;
+  active_hrv: number | null;
+  other_hrv: number | null;
+  active_rhr: number | null;
+  other_rhr: number | null;
+  active_readiness: number | null;
+  other_readiness: number | null;
+  active_ahi: number | null;
+  other_ahi: number | null;
+  active_spo2_min: number | null;
+  other_spo2_min: number | null;
+}
+
+export interface BaselineNoteRow {
+  note_category: string;
+  note_text: string;
 }
 
 export interface CpapImpactMetric {
@@ -351,16 +380,8 @@ export const api = {
     }>("/api/admin/connectors"),
   getHabitsImpact: () =>
     fetchJson<{
-      habits: Array<{
-        habit: string;
-        active_days: number;
-        active_sleep_score: number | null;
-        other_sleep_score: number | null;
-        active_deep_pct: number | null;
-        other_deep_pct: number | null;
-        active_hrv: number | null;
-        other_hrv: number | null;
-      }>;
+      habits: HabitImpactRow[];
+      baseline_notes: BaselineNoteRow[];
     }>("/api/dashboard/habits-impact"),
   getGSheetsStatus: () =>
     fetchJson<{
