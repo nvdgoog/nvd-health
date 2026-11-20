@@ -106,6 +106,10 @@ class TestRegistrySqlAndDataform(unittest.TestCase):
         self.assertIn("FROM ${ref(\"google_daily_resting_heart_rate\")}", sqlx)
         # Verify literal DATE(timestamp) appears for UTC-midnight daily summaries
         self.assertGreaterEqual(sqlx.count("DATE(timestamp) AS health_date"), 6)
+        # Verify v2 sleep algorithm prioritization & non-overlapping nap deduplication
+        self.assertIn("sleep_session_v2", sqlx)
+        self.assertIn("non_overlapping_sleep_sessions", sqlx)
+        self.assertIn("stress_score > 0", sqlx)
 
     def test_build_merge_sql_system_and_health_tables(self) -> None:
         etl_spec = SYSTEM_TABLES["bronze_etl_runs"]

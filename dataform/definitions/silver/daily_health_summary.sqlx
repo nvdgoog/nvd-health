@@ -50,6 +50,7 @@ WITH
     SELECT
       sleep_id,
       sleep_type,
+      algorithm_version,
       minutes_in_sleep_period,
       minutes_after_wake_up,
       minutes_to_fall_asleep,
@@ -59,6 +60,8 @@ WITH
       minutes_to_persistent_sleep,
       sleep_start,
       sleep_end,
+      sleep_last_updated,
+      _ingested_at,
       DATE(sleep_end, 'America/Los_Angeles') AS health_date
     FROM ${ref("google_user_sleeps")}
     WHERE sleep_end IS NOT NULL
@@ -82,27 +85,64 @@ WITH
     QUALIFY ROW_NUMBER() OVER (
       PARTITION BY health_date
       ORDER BY
+        CASE
+          WHEN algorithm_version = 'sleep_session_v2' THEN 0
+          WHEN algorithm_version LIKE '%v2%' THEN 1
+          ELSE 2
+        END,
         CASE WHEN sleep_type = 'STAGES' THEN 0 ELSE 1 END,
+        sleep_last_updated DESC NULLS LAST,
         minutes_asleep DESC,
         sleep_end DESC
     ) = 1
   ),
 
-  daily_sleep_totals AS (
+  -- Exclude duplicate algorithm versions (e.g. sleep_session_v1 overlapping sleep_session_v2)
+  -- and keep only primary sleep plus strictly disjoint non-overlapping naps.
+  non_overlapping_sleep_sessions AS (
     SELECT
       s.health_date,
+      s.sleep_id,
+      s.minutes_asleep,
+      s.sleep_id = p.primary_sleep_id AS is_primary
+    FROM sleep_sessions_local AS s
+    INNER JOIN primary_sleep AS p
+      USING (health_date)
+    WHERE
+      s.sleep_id = p.primary_sleep_id
+      OR (
+        s.sleep_end <= p.primary_sleep_start
+        OR s.sleep_start >= p.primary_sleep_end
+      )
+    QUALIFY ROW_NUMBER() OVER (
+      PARTITION BY
+        s.health_date,
+        IF(s.sleep_id = p.primary_sleep_id, 'PRIMARY', CAST(TIMESTAMP_TRUNC(s.sleep_start, HOUR) AS STRING))
+      ORDER BY
+        CASE WHEN s.sleep_id = p.primary_sleep_id THEN 0 ELSE 1 END,
+        CASE
+          WHEN s.algorithm_version = 'sleep_session_v2' THEN 0
+          WHEN s.algorithm_version LIKE '%v2%' THEN 1
+          ELSE 2
+        END,
+        CASE WHEN s.sleep_type = 'STAGES' THEN 0 ELSE 1 END,
+        s.minutes_asleep DESC
+    ) = 1
+  ),
+
+  daily_sleep_totals AS (
+    SELECT
+      health_date,
       COUNT(*) AS sleep_session_count,
-      SUM(COALESCE(s.minutes_asleep, 0)) AS total_sleep_minutes,
+      SUM(COALESCE(minutes_asleep, 0)) AS total_sleep_minutes,
       SUM(
         CASE
-          WHEN s.sleep_id != p.primary_sleep_id THEN COALESCE(s.minutes_asleep, 0)
+          WHEN NOT is_primary THEN COALESCE(minutes_asleep, 0)
           ELSE 0
         END
       ) AS nap_minutes
-    FROM sleep_sessions_local AS s
-    LEFT JOIN primary_sleep AS p
-      USING (health_date)
-    GROUP BY s.health_date
+    FROM non_overlapping_sleep_sessions
+    GROUP BY health_date
   ),
 
   sleep_stages_agg AS (
@@ -228,6 +268,8 @@ WITH
       status AS stress_status
     FROM ${ref("google_stress_score")}
     WHERE date IS NOT NULL
+      AND COALESCE(calculation_failed, FALSE) = FALSE
+      AND stress_score > 0
     QUALIFY ROW_NUMBER() OVER (
       PARTITION BY DATE(date)
       ORDER BY updated_at DESC NULLS LAST, _ingested_at DESC
