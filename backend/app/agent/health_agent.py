@@ -51,10 +51,10 @@ OUTPUT FORMATTING:
 
 
 def configure_vertex_genai_env(settings: Settings) -> None:
-    """Ensure google-genai / google-adk routes through Vertex AI ADC rather than AI Studio API keys."""
-    os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "TRUE")
-    os.environ.setdefault("GOOGLE_CLOUD_PROJECT", settings.gcp_project_id)
-    os.environ.setdefault("GOOGLE_CLOUD_LOCATION", settings.gcp_region)
+    """Ensure google-genai / google-adk routes through Vertex AI global/regional ADC."""
+    os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "TRUE"
+    os.environ["GOOGLE_CLOUD_PROJECT"] = settings.gcp_project_id
+    os.environ["GOOGLE_CLOUD_LOCATION"] = settings.vertex_genai_location
 
 
 def build_adk_agent(
@@ -210,8 +210,9 @@ class HealthAnalystService:
         )
 
         models_to_try = [self.settings.gemini_model]
-        if self.settings.gemini_model != "gemini-2.5-pro":
-            models_to_try.append("gemini-2.5-pro")
+        for fallback in ("gemini-4-hydrogen", "gemini-4-argon", "gemini-3.5-flash-lite"):
+            if fallback not in models_to_try:
+                models_to_try.append(fallback)
 
         last_exc: Optional[Exception] = None
         for model_name in models_to_try:

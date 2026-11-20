@@ -42,6 +42,7 @@ class Settings(BaseSettings):
 
     # Vertex AI / ADK Agent Engine
     gemini_model: str = Field(default="gemini-4-hydrogen")
+    vertex_genai_location: str = Field(default="global")
     agent_engine_resource_name: Optional[str] = Field(default=None)
 
     # Health Domain Defaults

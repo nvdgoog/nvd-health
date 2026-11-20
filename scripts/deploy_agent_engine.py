@@ -44,9 +44,10 @@ def main() -> int:
             "BQ_DATASET_SILVER": settings.bq_dataset_silver,
             "BQ_DATASET_GOLD": settings.bq_dataset_gold,
             "GEMINI_MODEL": settings.gemini_model,
+            "VERTEX_GENAI_LOCATION": settings.vertex_genai_location,
             "GOOGLE_GENAI_USE_VERTEXAI": "TRUE",
             "GOOGLE_CLOUD_PROJECT": settings.gcp_project_id,
-            "GOOGLE_CLOUD_LOCATION": settings.gcp_region,
+            "GOOGLE_CLOUD_LOCATION": settings.vertex_genai_location,
             "DEFAULT_CPAP_START_DATE": settings.default_cpap_start_date,
         },
     )

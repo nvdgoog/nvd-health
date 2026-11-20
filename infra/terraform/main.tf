@@ -323,6 +323,10 @@ resource "google_cloud_run_v2_service" "web" {
         value = var.gemini_model
       }
       env {
+        name  = "VERTEX_GENAI_LOCATION"
+        value = "global"
+      }
+      env {
         name  = "GOOGLE_GENAI_USE_VERTEXAI"
         value = "TRUE"
       }
@@ -332,7 +336,7 @@ resource "google_cloud_run_v2_service" "web" {
       }
       env {
         name  = "GOOGLE_CLOUD_LOCATION"
-        value = var.region
+        value = "global"
       }
       env {
         name  = "AGENT_ENGINE_RESOURCE_NAME"
