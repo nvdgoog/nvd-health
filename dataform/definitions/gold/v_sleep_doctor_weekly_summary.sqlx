@@ -150,6 +150,9 @@ SELECT
   d.resting_heart_rate,
   d.hrv_rmssd_ms,
   d.nocturnal_hr_avg,
+  d.activity_notes,
+  d.morning_coffee_cups,
+  d.wake_up_observations,
   l7.*,
   l30.*,
   b30.*

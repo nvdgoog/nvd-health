@@ -167,6 +167,40 @@ export const IntradayDrawer: React.FC<IntradayDrawerProps> = ({
               </div>
             </div>
 
+            {(data.summary.activity_notes ||
+              data.summary.wake_up_observations ||
+              data.summary.morning_coffee_cups != null) && (
+              <div className="rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50/50 dark:bg-amber-950/20 p-4 space-y-2 text-xs">
+                <div className="font-semibold text-amber-900 dark:text-amber-300">
+                  Journal &amp; Wake-Up Observations
+                </div>
+                {data.summary.activity_notes && (
+                  <div>
+                    <span className="text-slate-500">Day-Before Activities:</span>{" "}
+                    <span className="font-medium text-slate-800 dark:text-slate-100">
+                      {data.summary.activity_notes}
+                    </span>
+                  </div>
+                )}
+                {data.summary.morning_coffee_cups != null && (
+                  <div>
+                    <span className="text-slate-500">Morning Coffee:</span>{" "}
+                    <span className="font-medium text-slate-800 dark:text-slate-100">
+                      {data.summary.morning_coffee_cups} cups
+                    </span>
+                  </div>
+                )}
+                {data.summary.wake_up_observations && (
+                  <div>
+                    <span className="text-slate-500">Wake-Up Notes:</span>{" "}
+                    <span className="text-slate-800 dark:text-slate-100">
+                      {data.summary.wake_up_observations}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Hypnogram Timeline */}
             <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4">
               <div className="flex items-center justify-between mb-3">

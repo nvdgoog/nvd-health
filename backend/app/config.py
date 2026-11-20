@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     # Health Domain Defaults
     local_timezone: str = Field(default="America/Los_Angeles")
     default_cpap_start_date: str = Field(default="2026-10-13")
+    google_sheet_id: str = Field(
+        default="17SgQVoT53xm5299WKZHsIW5PgLInuszCSfeLu50Zsvc"
+    )
 
     # Frontend Static Bundle Path
     frontend_dist_dir: str = Field(

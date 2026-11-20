@@ -17,6 +17,7 @@ gcloud services enable \
   artifactregistry.googleapis.com \
   cloudbuild.googleapis.com \
   iam.googleapis.com \
+  sheets.googleapis.com \
   --project="${PROJECT_ID}"
 
 if ! gcloud artifacts repositories describe nvd-health --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then

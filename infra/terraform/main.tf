@@ -16,6 +16,7 @@ locals {
     "artifactregistry.googleapis.com",
     "cloudbuild.googleapis.com",
     "iam.googleapis.com",
+    "sheets.googleapis.com",
   ]
   medallion_datasets = {
     bronze = "nvd_health_bronze"
@@ -345,6 +346,10 @@ resource "google_cloud_run_v2_service" "web" {
       env {
         name  = "DEFAULT_CPAP_START_DATE"
         value = var.default_cpap_start_date
+      }
+      env {
+        name  = "GOOGLE_SHEET_ID"
+        value = "17SgQVoT53xm5299WKZHsIW5PgLInuszCSfeLu50Zsvc"
       }
     }
   }

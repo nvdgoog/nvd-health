@@ -273,6 +273,42 @@ export const SleepDoctorPage: React.FC = () => {
           </table>
         )}
       </div>
+
+      {/* Past 7 Nights Subjective Wake-Up Observations */}
+      {nights.some((r) => r.wake_up_observations || r.activity_notes) && (
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 print-card space-y-3">
+          <h2 className="text-base font-semibold">
+            Patient Wake-Up Observations &amp; Activity Context (Past 7 Nights)
+          </h2>
+          <div className="space-y-2.5 text-xs">
+            {nights
+              .filter((r) => r.wake_up_observations || r.activity_notes)
+              .map((r) => (
+                <div
+                  key={`obs-${String(r.health_date)}`}
+                  className="rounded-xl bg-slate-50 dark:bg-slate-800/50 p-3 space-y-1"
+                >
+                  <div className="font-mono font-semibold text-slate-800 dark:text-slate-100">
+                    {String(r.health_date)}
+                    {r.morning_coffee_cups != null
+                      ? ` · Morning Coffee: ${String(r.morning_coffee_cups)} cups`
+                      : ""}
+                  </div>
+                  {r.activity_notes ? (
+                    <div className="text-slate-600 dark:text-slate-300">
+                      <b>Prior-Day Activities:</b> {String(r.activity_notes)}
+                    </div>
+                  ) : null}
+                  {r.wake_up_observations ? (
+                    <div className="text-slate-700 dark:text-slate-200">
+                      <b>Wake-Up Notes:</b> {String(r.wake_up_observations)}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

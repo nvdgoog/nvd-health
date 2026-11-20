@@ -63,6 +63,7 @@ const CORR_OPTIONS = [
   { key: "cpap_ahi", label: "CPAP AHI" },
   { key: "cpap_avg_leak", label: "CPAP Leak (L/min)" },
   { key: "cpap_usage_hours", label: "CPAP Hours" },
+  { key: "morning_coffee_cups", label: "Morning Coffee (cups)" },
 ];
 
 export const DashboardPage: React.FC = () => {
@@ -74,6 +75,18 @@ export const DashboardPage: React.FC = () => {
   const [allDays, setAllDays] = useState<DailyPerformanceRow[]>([]);
   const [cpapStartDate, setCpapStartDate] = useState("2026-10-13");
   const [impactMetrics, setImpactMetrics] = useState<CpapImpactMetric[]>([]);
+  const [habitsImpact, setHabitsImpact] = useState<
+    Array<{
+      habit: string;
+      active_days: number;
+      active_sleep_score: number | null;
+      other_sleep_score: number | null;
+      active_deep_pct: number | null;
+      other_deep_pct: number | null;
+      active_hrv: number | null;
+      other_hrv: number | null;
+    }>
+  >([]);
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
@@ -94,11 +107,12 @@ export const DashboardPage: React.FC = () => {
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([api.getOverview(), api.getCpapImpact()])
-      .then(([ov, imp]) => {
+    Promise.all([api.getOverview(), api.getCpapImpact(), api.getHabitsImpact()])
+      .then(([ov, imp, hab]) => {
         setAllDays(ov.days);
         setCpapStartDate(ov.cpap_start_date);
         setImpactMetrics(imp.metrics);
+        setHabitsImpact(hab.habits);
       })
       .finally(() => setLoading(false));
   }, []);
@@ -649,7 +663,53 @@ export const DashboardPage: React.FC = () => {
         </section>
       )}
 
-      {/* Section 5: Extensible Modular Widgets (Transcend Micro & ZenPlanner) */}
+      {/* Section 5: Journal Habits Impact + Extensible Modular Widgets */}
+      {habitsImpact.some((h) => h.active_days > 0) && (
+        <section className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-3">
+          <div>
+            <h3 className="text-sm font-semibold">
+              Daily Activities &amp; Habits Impact (From Google Sheet Journal)
+            </h3>
+            <p className="text-xs text-slate-500">
+              Comparing nights following each logged activity against non-activity nights (click any chart date to read your wake-up notes)
+            </p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {habitsImpact.map((h) => (
+              <div
+                key={h.habit}
+                className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/50 p-4 text-xs space-y-1.5"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-sm">{h.habit}</span>
+                  <span className="px-2 py-0.5 rounded-full bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300 font-medium">
+                    {h.active_days} nights
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Sleep Score:</span>
+                  <span>
+                    <b>{h.active_sleep_score ?? "—"}</b> vs. {h.other_sleep_score ?? "—"}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Deep Sleep %:</span>
+                  <span>
+                    <b>{h.active_deep_pct ?? "—"}%</b> vs. {h.other_deep_pct ?? "—"}%
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">HRV (RMSSD):</span>
+                  <span>
+                    <b>{h.active_hrv ?? "—"} ms</b> vs. {h.other_hrv ?? "—"} ms
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       <ModularExtensionWidgets days={filteredDays} />
 
       {/* Bronze Intraday Drill-Down Drawer */}

@@ -58,6 +58,12 @@ export interface DailyPerformanceRow {
   transcend_usage_minutes?: number | null;
   zenplanner_workout_count?: number | null;
   zenplanner_wod_name?: string | null;
+  activity_notes?: string | null;
+  morning_coffee_cups?: number | null;
+  wake_up_observations?: string | null;
+  has_crossfit_wod?: boolean | null;
+  has_cold_plunge?: boolean | null;
+  has_dry_sauna?: boolean | null;
 }
 
 export interface CpapImpactMetric {
@@ -343,4 +349,39 @@ export const api = {
         description: string;
       }>;
     }>("/api/admin/connectors"),
+  getHabitsImpact: () =>
+    fetchJson<{
+      habits: Array<{
+        habit: string;
+        active_days: number;
+        active_sleep_score: number | null;
+        other_sleep_score: number | null;
+        active_deep_pct: number | null;
+        other_deep_pct: number | null;
+        active_hrv: number | null;
+        other_hrv: number | null;
+      }>;
+    }>("/api/dashboard/habits-impact"),
+  getGSheetsStatus: () =>
+    fetchJson<{
+      spreadsheet_id: string;
+      web_service_account: string;
+      etl_service_account: string;
+      observation_rows: number;
+      baseline_note_rows: number;
+      min_date: string | null;
+      max_date: string | null;
+    }>("/api/admin/gsheets/status"),
+  syncGSheets: () =>
+    fetchJson<{
+      spreadsheet_id: string;
+      run_id: string;
+      observations: { staged: number; inserted: number; updated: number };
+      baseline_notes: { staged: number; inserted: number; updated: number };
+      dataform_status: string;
+    }>("/api/admin/gsheets/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trigger_dataform: true }),
+    }),
 };

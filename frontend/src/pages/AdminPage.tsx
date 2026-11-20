@@ -71,15 +71,28 @@ export const AdminPage: React.FC = () => {
   const [isManualOverride, setIsManualOverride] = useState(false);
   const [savingSetting, setSavingSetting] = useState(false);
 
+  // Google Sheets Journal Sync
+  const [gsStatus, setGsStatus] = useState<{
+    spreadsheet_id: string;
+    web_service_account: string;
+    etl_service_account: string;
+    observation_rows: number;
+    baseline_note_rows: number;
+    min_date: string | null;
+    max_date: string | null;
+  } | null>(null);
+  const [syncingSheet, setSyncingSheet] = useState(false);
+
   const sseRef = useRef<EventSource | null>(null);
 
   const refreshAll = async () => {
     try {
-      const [runsRes, ledgerRes, settingsRes, connRes] = await Promise.all([
+      const [runsRes, ledgerRes, settingsRes, connRes, gsRes] = await Promise.all([
         api.listEtlRuns(),
         api.getLedger(),
         api.getSettings(),
         api.getConnectors(),
+        api.getGSheetsStatus().catch(() => null),
       ]);
       setRuns(runsRes.runs);
       if (activeRun) {
@@ -93,6 +106,7 @@ export const AdminPage: React.FC = () => {
       setAutoDetectedDate(settingsRes.auto_detected_value || "2026-10-13");
       setIsManualOverride(Boolean(settingsRes.is_manual_override));
       setConnectors(connRes.connectors);
+      if (gsRes) setGsStatus(gsRes);
     } catch (err) {
       setErrorMsg((err as Error).message);
     }
@@ -714,6 +728,49 @@ export const AdminPage: React.FC = () => {
               </div>
             </div>
           )}
+
+          {/* Google Sheet Activities & Wake-Up Observations Sync */}
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 p-3.5 text-xs space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-slate-800 dark:text-slate-100">
+                Google Sheet Journal &amp; Activities Sync
+              </span>
+              <button
+                onClick={async () => {
+                  setSyncingSheet(true);
+                  setErrorMsg(null);
+                  try {
+                    const res = await api.syncGSheets();
+                    setUploadStatusMsg(
+                      `Synced ${res.observations.staged} daily journal rows & ${res.baseline_notes.staged} routine notes (Dataform: ${res.dataform_status}).`
+                    );
+                    await refreshAll();
+                  } catch (err) {
+                    setErrorMsg((err as Error).message);
+                  } finally {
+                    setSyncingSheet(false);
+                  }
+                }}
+                disabled={syncingSheet}
+                className="rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-3 py-1.5 font-medium"
+              >
+                {syncingSheet ? "Syncing..." : "Sync Sheet & Rebuild Silver/Gold"}
+              </button>
+            </div>
+            <div className="text-slate-500">
+              Imports only <b>Activity Notes</b>, <b>Morning Coffee</b>, <b>Wake-Up Observations</b>, and <b>Notes</b> routines (official exports remain source of truth for health/CPAP numbers).
+            </div>
+            {gsStatus && (
+              <div className="space-y-1 text-[11px] text-slate-500">
+                <div>
+                  Loaded: <b>{gsStatus.observation_rows}</b> nights ({gsStatus.min_date || "—"} → {gsStatus.max_date || "—"}) · <b>{gsStatus.baseline_note_rows}</b> baseline notes
+                </div>
+                <div className="font-mono break-all">
+                  Share Sheet (Viewer) with: {gsStatus.web_service_account} &amp; {gsStatus.etl_service_account}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Pluggable Connector Registry */}

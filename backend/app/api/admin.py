@@ -61,6 +61,11 @@ class UpdateCpapStartDateRequest(BaseModel):
     use_auto_detected: bool = False
 
 
+class GSheetsSyncRequest(BaseModel):
+    spreadsheet_id: Optional[str] = None
+    trigger_dataform: bool = True
+
+
 def _bq_client() -> bigquery.Client:
     s = get_settings()
     return bigquery.Client(project=s.gcp_project_id, location=s.bq_location)
@@ -432,6 +437,65 @@ def update_cpap_start_date(payload: UpdateCpapStartDateRequest) -> Dict[str, Any
 def list_connectors() -> Dict[str, Any]:
     registry = ConnectorRegistry()
     return {"connectors": registry.list_connectors()}
+
+
+@router.get("/gsheets/status")
+def get_gsheets_status() -> Dict[str, Any]:
+    settings = get_settings()
+    client = _bq_client()
+    bronze_fqn = f"{settings.gcp_project_id}.{settings.bq_dataset_bronze}"
+    obs_fqn = f"{bronze_fqn}.bronze_journal_daily_observations"
+    notes_fqn = f"{bronze_fqn}.bronze_journal_baseline_notes"
+
+    obs_count = 0
+    notes_count = 0
+    min_date = None
+    max_date = None
+    try:
+        client.get_table(obs_fqn)
+        row = list(
+            client.query(
+                f"SELECT COUNT(*) AS cnt, CAST(MIN(observation_date) AS STRING) AS mn, CAST(MAX(observation_date) AS STRING) AS mx FROM `{obs_fqn}`"
+            ).result()
+        )[0]
+        obs_count = int(row["cnt"] or 0)
+        min_date = row["mn"]
+        max_date = row["mx"]
+    except Exception:
+        pass
+    try:
+        client.get_table(notes_fqn)
+        row = list(client.query(f"SELECT COUNT(*) AS cnt FROM `{notes_fqn}`").result())[0]
+        notes_count = int(row["cnt"] or 0)
+    except Exception:
+        pass
+
+    return {
+        "spreadsheet_id": settings.google_sheet_id,
+        "web_service_account": f"nvd-health-web-sa@{settings.gcp_project_id}.iam.gserviceaccount.com",
+        "etl_service_account": f"nvd-health-etl-sa@{settings.gcp_project_id}.iam.gserviceaccount.com",
+        "observation_rows": obs_count,
+        "baseline_note_rows": notes_count,
+        "min_date": min_date,
+        "max_date": max_date,
+    }
+
+
+@router.post("/gsheets/sync")
+def sync_google_sheet_observations(payload: Optional[GSheetsSyncRequest] = None) -> Dict[str, Any]:
+    from app.etl.gsheets_sync import fetch_and_sync_google_sheet
+
+    settings = get_settings()
+    req = payload or GSheetsSyncRequest()
+    try:
+        return fetch_and_sync_google_sheet(
+            spreadsheet_id=req.spreadsheet_id or settings.google_sheet_id,
+            trigger_dataform=req.trigger_dataform,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Google Sheet sync failed: {exc}") from exc
 
 
 def _safe_json_loads(raw: Optional[str], fallback: Any) -> Any:

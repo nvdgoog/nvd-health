@@ -28,6 +28,7 @@ CORRELATION_WHITELIST = {
     "cpap_ahi": "cpap_ahi",
     "cpap_avg_leak": "cpap_avg_leak",
     "cpap_usage_hours": "cpap_usage_hours",
+    "morning_coffee_cups": "morning_coffee_cups",
 }
 
 
@@ -113,6 +114,65 @@ def get_cpap_before_after() -> Dict[str, Any]:
     except Exception:
         rows = []
     return {"metrics": rows}
+
+
+@router.get("/dashboard/habits-impact")
+def get_habits_impact() -> Dict[str, Any]:
+    settings = get_settings()
+    client = _bq_client()
+    silver_fqn = f"{settings.gcp_project_id}.{settings.bq_dataset_silver}"
+    tbl_fqn = f"{silver_fqn}.daily_health_summary"
+    if not _table_exists(client, tbl_fqn):
+        return {"habits": []}
+
+    sql = f"""
+    WITH tagged AS (
+      SELECT
+        health_date,
+        sleep_overall_score,
+        deep_sleep_pct,
+        rem_sleep_pct,
+        hrv_rmssd_ms,
+        resting_heart_rate,
+        cpap_ahi,
+        has_crossfit_wod,
+        has_cold_plunge,
+        has_dry_sauna
+      FROM `{tbl_fqn}`
+      WHERE activity_notes IS NOT NULL
+    )
+    SELECT 'CrossFit WOD' AS habit, COUNTIF(has_crossfit_wod) AS active_days,
+      ROUND(AVG(IF(has_crossfit_wod, sleep_overall_score, NULL)), 1) AS active_sleep_score,
+      ROUND(AVG(IF(NOT COALESCE(has_crossfit_wod, FALSE), sleep_overall_score, NULL)), 1) AS other_sleep_score,
+      ROUND(AVG(IF(has_crossfit_wod, deep_sleep_pct, NULL)), 1) AS active_deep_pct,
+      ROUND(AVG(IF(NOT COALESCE(has_crossfit_wod, FALSE), deep_sleep_pct, NULL)), 1) AS other_deep_pct,
+      ROUND(AVG(IF(has_crossfit_wod, hrv_rmssd_ms, NULL)), 1) AS active_hrv,
+      ROUND(AVG(IF(NOT COALESCE(has_crossfit_wod, FALSE), hrv_rmssd_ms, NULL)), 1) AS other_hrv
+    FROM tagged
+    UNION ALL
+    SELECT 'Cold Plunge' AS habit, COUNTIF(has_cold_plunge) AS active_days,
+      ROUND(AVG(IF(has_cold_plunge, sleep_overall_score, NULL)), 1),
+      ROUND(AVG(IF(NOT COALESCE(has_cold_plunge, FALSE), sleep_overall_score, NULL)), 1),
+      ROUND(AVG(IF(has_cold_plunge, deep_sleep_pct, NULL)), 1),
+      ROUND(AVG(IF(NOT COALESCE(has_cold_plunge, FALSE), deep_sleep_pct, NULL)), 1),
+      ROUND(AVG(IF(has_cold_plunge, hrv_rmssd_ms, NULL)), 1),
+      ROUND(AVG(IF(NOT COALESCE(has_cold_plunge, FALSE), hrv_rmssd_ms, NULL)), 1)
+    FROM tagged
+    UNION ALL
+    SELECT 'Dry Sauna' AS habit, COUNTIF(has_dry_sauna) AS active_days,
+      ROUND(AVG(IF(has_dry_sauna, sleep_overall_score, NULL)), 1),
+      ROUND(AVG(IF(NOT COALESCE(has_dry_sauna, FALSE), sleep_overall_score, NULL)), 1),
+      ROUND(AVG(IF(has_dry_sauna, deep_sleep_pct, NULL)), 1),
+      ROUND(AVG(IF(NOT COALESCE(has_dry_sauna, FALSE), deep_sleep_pct, NULL)), 1),
+      ROUND(AVG(IF(has_dry_sauna, hrv_rmssd_ms, NULL)), 1),
+      ROUND(AVG(IF(NOT COALESCE(has_dry_sauna, FALSE), hrv_rmssd_ms, NULL)), 1)
+    FROM tagged
+    """
+    try:
+        rows = [dict(r.items()) for r in client.query(sql).result()]
+    except Exception:
+        rows = []
+    return {"habits": rows}
 
 
 @router.get("/dashboard/correlations")

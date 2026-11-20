@@ -462,6 +462,25 @@ WITH
     GROUP BY 1
   ),
 
+  -- Subjective daily activities, morning coffee & wake-up observations from Google Sheets
+  daily_journal AS (
+    SELECT
+      observation_date AS health_date,
+      night_number AS journal_night_number,
+      activity_notes,
+      morning_coffee_cups,
+      wake_up_observations,
+      REGEXP_CONTAINS(LOWER(COALESCE(activity_notes, '')), r'crossfit') AS has_crossfit_wod,
+      REGEXP_CONTAINS(LOWER(COALESCE(activity_notes, '')), r'cold plunge') AS has_cold_plunge,
+      REGEXP_CONTAINS(LOWER(COALESCE(activity_notes, '')), r'sauna') AS has_dry_sauna
+    FROM ${ref("bronze_journal_daily_observations")}
+    WHERE observation_date IS NOT NULL
+    QUALIFY ROW_NUMBER() OVER (
+      PARTITION BY observation_date
+      ORDER BY _ingested_at DESC
+    ) = 1
+  ),
+
   all_observed_dates AS (
     SELECT health_date FROM primary_sleep
     UNION DISTINCT SELECT health_date FROM daily_rhr
@@ -475,6 +494,7 @@ WITH
     UNION DISTINCT SELECT health_date FROM daily_exercises
     UNION DISTINCT SELECT health_date FROM daily_transcend
     UNION DISTINCT SELECT health_date FROM daily_zenplanner
+    UNION DISTINCT SELECT health_date FROM daily_journal
   ),
 
   date_bounds AS (
@@ -627,7 +647,16 @@ SELECT
   zp.zenplanner_workout_count,
   zp.zenplanner_wod_name,
   zp.zenplanner_rx_flag,
-  zp.zenplanner_score_summary
+  zp.zenplanner_score_summary,
+
+  -- Subjective Journal, Activities & Wake-Up Observations (Google Sheets)
+  jrn.journal_night_number,
+  jrn.activity_notes,
+  jrn.morning_coffee_cups,
+  jrn.wake_up_observations,
+  jrn.has_crossfit_wod,
+  jrn.has_cold_plunge,
+  jrn.has_dry_sauna
 FROM date_spine AS ds
 CROSS JOIN cpap_config AS cfg
 LEFT JOIN daily_cpap AS cpap USING (health_date)
@@ -660,3 +689,4 @@ LEFT JOIN daily_weight AS wt USING (health_date)
 LEFT JOIN daily_exercises AS ex USING (health_date)
 LEFT JOIN daily_transcend AS tr USING (health_date)
 LEFT JOIN daily_zenplanner AS zp USING (health_date)
+LEFT JOIN daily_journal AS jrn USING (health_date)

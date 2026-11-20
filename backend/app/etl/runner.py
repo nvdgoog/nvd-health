@@ -353,6 +353,28 @@ class HealthEtlRunner:
                 fallback_date=self.settings.default_cpap_start_date
             )
 
+            # Soft-sync subjective journal & activities from Google Sheet (if shared with SA)
+            if self.settings.google_sheet_id:
+                try:
+                    from app.etl.gsheets_sync import fetch_and_sync_google_sheet
+
+                    gs_res = fetch_and_sync_google_sheet(
+                        spreadsheet_id=self.settings.google_sheet_id,
+                        run_id=run_id,
+                        trigger_dataform=False,
+                    )
+                    table_stats["bronze_journal_daily_observations"] = {
+                        "files": 1,
+                        **gs_res["observations"],
+                    }
+                    table_stats["bronze_journal_baseline_notes"] = {
+                        "files": 1,
+                        **gs_res["baseline_notes"],
+                    }
+                except Exception:
+                    # Non-fatal if sheet has not yet been shared with the service account
+                    pass
+
             run_state["table_stats_json"] = json.dumps(table_stats)
 
             # Step 3: Programmatically trigger Dataform Silver & Gold build

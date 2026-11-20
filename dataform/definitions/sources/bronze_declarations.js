@@ -26,7 +26,9 @@ const bronzeTables = [
   "google_demographic_vo2max",
   "google_cardio_acute_chronic_workload_ratio",
   "transcend_cpap_daily_usage",
-  "zenplanner_workouts"
+  "zenplanner_workouts",
+  "bronze_journal_daily_observations",
+  "bronze_journal_baseline_notes"
 ];
 
 bronzeTables.forEach((name) => {

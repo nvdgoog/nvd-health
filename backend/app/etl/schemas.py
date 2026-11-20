@@ -574,6 +574,33 @@ CORE_HEALTH_TABLES: Dict[str, TableSchemaSpec] = {
         partition_field="workout_date",
         description="Future connector target table for ZenPlanner CrossFit workout exports.",
     ),
+    "bronze_journal_daily_observations": TableSchemaSpec(
+        table_name="bronze_journal_daily_observations",
+        columns={
+            "observation_date": "DATE",
+            "night_number": "INT64",
+            "activity_notes": "STRING",
+            "morning_coffee_cups": "FLOAT64",
+            "wake_up_observations": "STRING",
+            **METADATA_COLUMNS,
+        },
+        primary_keys=("observation_date",),
+        order_by_column="_ingested_at",
+        partition_field="observation_date",
+        description="Daily activities, morning coffee intake, and wake-up subjective observations from Google Sheets.",
+    ),
+    "bronze_journal_baseline_notes": TableSchemaSpec(
+        table_name="bronze_journal_baseline_notes",
+        columns={
+            "note_id": "STRING",
+            "note_category": "STRING",
+            "note_text": "STRING",
+            **METADATA_COLUMNS,
+        },
+        primary_keys=("note_id",),
+        order_by_column="_ingested_at",
+        description="Baseline habits, routines, diet, and supplement notes from Google Sheets Notes tab.",
+    ),
 }
 
 
