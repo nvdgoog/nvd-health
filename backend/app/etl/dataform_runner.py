@@ -79,13 +79,24 @@ class DataformRunner:
             raise FileNotFoundError(f"Dataform directory not found: {self.dataform_dir}")
 
         self.ensure_repository_and_workspace()
+        for legacy_file in ("package.json", "package-lock.json", "dataform.json"):
+            try:
+                self.client.remove_file(
+                    request=dataform.RemoveFileRequest(
+                        workspace=self.workspace_path,
+                        path=legacy_file,
+                    )
+                )
+            except Exception:
+                pass
+
         synced: List[str] = []
         for path in sorted(self.dataform_dir.rglob("*")):
             if path.is_dir():
                 continue
             rel = path.relative_to(self.dataform_dir).as_posix()
-            # Skip local-only creds or node_modules
-            if rel.startswith(".") or "node_modules/" in rel or rel == "package-lock.json":
+            # Skip local-only creds, node_modules, or legacy package.json (workflow_settings.yaml uses dataformCoreVersion)
+            if rel.startswith(".") or "node_modules/" in rel or rel in ("package.json", "package-lock.json", "dataform.json"):
                 continue
             contents = path.read_bytes()
             self.client.write_file(
