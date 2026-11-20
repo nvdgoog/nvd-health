@@ -28,8 +28,8 @@ DEFAULT_SCAN_PREFIXES = [
     "uploads/",
 ]
 
-# Bounded chunk & flush limit to prevent OOM on massive files (e.g. 882k-row sensor token CSVs)
-BATCH_ROW_FLUSH_LIMIT = 20000
+# Bounded chunk & flush limit (disk-backed NDJSON + 8Gi RAM safely handles 100k-row batches)
+BATCH_ROW_FLUSH_LIMIT = 100000
 PREFETCH_WINDOW_SIZE = 40
 CHECKPOINT_FILE_INTERVAL = 100
 

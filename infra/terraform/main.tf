@@ -181,7 +181,7 @@ resource "google_cloud_run_v2_job" "etl_job" {
     template {
       service_account = google_service_account.etl_sa.email
       max_retries     = 0
-      timeout         = "3600s"
+      timeout         = "14400s"
 
       containers {
         image   = var.container_image
