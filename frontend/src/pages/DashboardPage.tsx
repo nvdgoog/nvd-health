@@ -73,7 +73,13 @@ const JournalAwareTooltip: React.FC<JournalTooltipProps> = ({
               {entry.name}:
             </span>
             <span className="font-semibold text-slate-900 dark:text-white">
-              {entry.value != null ? String(entry.value) : "—"}
+              {entry.value != null
+                ? typeof entry.value === "number"
+                  ? Number.isInteger(entry.value)
+                    ? String(entry.value)
+                    : entry.value.toFixed(1)
+                  : String(entry.value)
+                : "—"}
             </span>
           </div>
         ))}
@@ -832,7 +838,7 @@ export const DashboardPage: React.FC = () => {
                         label: "Sleep Score",
                         a: h.active_sleep_score,
                         b: h.other_sleep_score,
-                        unit: "",
+                        unit: " pts",
                         higherBetter: true,
                       },
                       {
@@ -860,14 +866,14 @@ export const DashboardPage: React.FC = () => {
                         label: "Readiness",
                         a: h.active_readiness,
                         b: h.other_readiness,
-                        unit: "",
+                        unit: " pts",
                         higherBetter: true,
                       },
                       {
                         label: "CPAP AHI",
                         a: h.active_ahi,
                         b: h.other_ahi,
-                        unit: "",
+                        unit: " ev/hr",
                         higherBetter: false,
                       },
                     ];
@@ -976,13 +982,13 @@ export const DashboardPage: React.FC = () => {
                   <thead className="sticky top-0 bg-white dark:bg-slate-900 z-10">
                     <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500">
                       <th className="py-2 pr-3">Date</th>
-                      <th className="py-2 pr-3">Coffee</th>
+                      <th className="py-2 pr-3 whitespace-nowrap">Coffee (cups)</th>
                       <th className="py-2 pr-3 min-w-[210px]">Prior-Day Activities</th>
                       <th className="py-2 pr-3 min-w-[240px]">Wake-Up Observations</th>
-                      <th className="py-2 pr-3 text-right">Sleep</th>
-                      <th className="py-2 pr-3 text-right">HRV</th>
-                      <th className="py-2 pr-3 text-right">RHR</th>
-                      <th className="py-2 text-right">AHI</th>
+                      <th className="py-2 pr-3 text-right whitespace-nowrap">Sleep Score (pts)</th>
+                      <th className="py-2 pr-3 text-right whitespace-nowrap">HRV (ms)</th>
+                      <th className="py-2 pr-3 text-right whitespace-nowrap">RHR (bpm)</th>
+                      <th className="py-2 text-right whitespace-nowrap">CPAP AHI (ev/hr)</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1012,7 +1018,9 @@ export const DashboardPage: React.FC = () => {
                           {d.wake_up_observations || "—"}
                         </td>
                         <td className="py-2 pr-3 text-right font-semibold tabular-nums">
-                          {d.sleep_overall_score ?? "—"}
+                          {d.sleep_overall_score != null
+                            ? d.sleep_overall_score.toFixed(1)
+                            : "—"}
                         </td>
                         <td className="py-2 pr-3 text-right tabular-nums">
                           {d.hrv_rmssd_ms != null
