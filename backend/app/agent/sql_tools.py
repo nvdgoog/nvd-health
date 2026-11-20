@@ -101,14 +101,22 @@ def list_health_tables() -> str:
 
 def describe_table_schema(dataset: str, table_name: str) -> str:
     """Return column names, BigQuery types, and descriptions for a Medallion table or view."""
-    from app.config import get_settings
-
     if dataset not in ALLOWED_DATASETS:
         return json.dumps({"error": f"Dataset {dataset!r} is not in allowed datasets."})
+    from app.config import get_settings
+
     settings = get_settings()
     client = get_bq_client()
     fqn = f"{settings.gcp_project_id}.{dataset}.{table_name}"
-    table = client.get_table(fqn)
+    try:
+        table = client.get_table(fqn)
+    except Exception as exc:
+        return json.dumps(
+            {
+                "error": f"Failed to inspect {fqn}: {exc}",
+                "hint": "Call list_health_tables to see valid dataset and table names.",
+            }
+        )
     cols = [
         {
             "name": f.name,
@@ -134,21 +142,32 @@ def run_readonly_sql(sql: str, max_rows: int = 200) -> str:
     Execute a validated read-only BigQuery SELECT query across nvd_health_gold,
     nvd_health_silver, or nvd_health_bronze and return JSON rows + row count.
     """
-    from google.cloud import bigquery
+    try:
+        safe_sql = validate_readonly_sql(sql)
+        from google.cloud import bigquery
 
-    safe_sql = validate_readonly_sql(sql)
+        bounded_max = max(1, min(int(max_rows), 500))
+        client = get_bq_client()
+        job_config = bigquery.QueryJobConfig(
+            maximum_bytes_billed=5 * 1024 * 1024 * 1024,  # 5 GiB safety guardrail
+            use_legacy_sql=False,
+        )
+        job = client.query(safe_sql, job_config=job_config)
+        rows_iter = job.result(max_results=bounded_max)
+        records = [dict(r.items()) for r in rows_iter]
+    except Exception as exc:
+        return json.dumps(
+            {
+                "error": str(exc),
+                "sql": sql,
+                "hint": "Use describe_table_schema to verify exact column names and retry with corrected SQL.",
+            }
+        )
+
     audit_log = _EXECUTED_SQL_LOG.get()
     if audit_log is not None and safe_sql not in audit_log:
         audit_log.append(safe_sql)
-    bounded_max = max(1, min(int(max_rows), 500))
-    client = get_bq_client()
-    job_config = bigquery.QueryJobConfig(
-        maximum_bytes_billed=5 * 1024 * 1024 * 1024,  # 5 GiB safety guardrail
-        use_legacy_sql=False,
-    )
-    job = client.query(safe_sql, job_config=job_config)
-    rows_iter = job.result(max_results=bounded_max)
-    records = [dict(r.items()) for r in rows_iter]
+
     return json.dumps(
         {
             "sql": safe_sql,

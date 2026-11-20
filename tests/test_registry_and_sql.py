@@ -151,6 +151,20 @@ class TestRegistrySqlAndDataform(unittest.TestCase):
         self.assertEqual(normalize_logical_path(root_p), normalize_logical_path(zip_p))
         self.assertEqual(normalize_logical_path(root_p), normalize_logical_path(folder_p))
 
+    def test_sql_tools_return_json_error_instead_of_crashing(self) -> None:
+        import json
+        from app.agent.sql_tools import describe_table_schema, run_readonly_sql
+
+        res = json.loads(
+            run_readonly_sql(
+                "DROP TABLE `house-tully-310623.nvd_health_silver.daily_health_summary`"
+            )
+        )
+        self.assertIn("error", res)
+
+        desc = json.loads(describe_table_schema("disallowed_ds", "daily_health_summary"))
+        self.assertIn("error", desc)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -558,6 +558,7 @@ SELECT
   ps.minutes_to_persistent_sleep,
   dst.sleep_session_count,
   dst.total_sleep_minutes,
+  ROUND(CAST(dst.total_sleep_minutes AS FLOAT64) / 60.0, 2) AS total_sleep_hours,
   dst.nap_minutes,
   COALESCE(ROUND(ssa.deep_sleep_stage_minutes, 1), CAST(sc.score_deep_sleep_minutes AS FLOAT64)) AS deep_sleep_minutes,
   ROUND(ssa.rem_sleep_stage_minutes, 1) AS rem_sleep_minutes,
