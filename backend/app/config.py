@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     # Dataform Orchestration
     dataform_repository_id: str = Field(default="nvd-health-dataform")
     dataform_workspace_id: str = Field(default="main-workspace")
+    dataform_service_account: Optional[str] = Field(default=None)
     dataform_dir: str = Field(
         default=str(Path(__file__).resolve().parents[2] / "dataform")
     )

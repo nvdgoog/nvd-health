@@ -31,6 +31,7 @@ def main() -> int:
         dataform_dir=settings.dataform_dir,
         bq_location=settings.bq_location,
         silver_dataset=settings.bq_dataset_silver,
+        service_account=settings.dataform_service_account,
     )
 
     synced = runner.sync_workspace_files()

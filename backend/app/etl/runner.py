@@ -369,6 +369,7 @@ class HealthEtlRunner:
                     dataform_dir=self.settings.dataform_dir,
                     bq_location=self.settings.bq_location,
                     silver_dataset=self.settings.bq_dataset_silver,
+                    service_account=self.settings.dataform_service_account,
                 )
                 df_result = df_runner.compile_and_run(sync_files=True)
                 run_state["dataform_compilation_id"] = df_result.compilation_id

@@ -150,6 +150,24 @@ resource "google_bigquery_dataset_iam_member" "dataform_agent_bq_editor" {
   member     = "serviceAccount:${google_project_service_identity.dataform_agent.email}"
 }
 
+# Strict act-as IAM bindings allowing Dataform to execute WorkflowInvocations as nvd-health-etl-sa
+resource "google_service_account_iam_member" "dataform_agent_token_creator_etl" {
+  service_account_id = google_service_account.etl_sa.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_project_service_identity.dataform_agent.email}"
+}
+
+resource "google_service_account_iam_member" "dataform_act_as_etl" {
+  for_each = toset(concat([
+    "serviceAccount:${google_project_service_identity.dataform_agent.email}",
+    "serviceAccount:${google_service_account.etl_sa.email}",
+    "serviceAccount:${google_service_account.web_sa.email}",
+  ], var.authorized_invokers))
+  service_account_id = google_service_account.etl_sa.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = each.value
+}
+
 # Vertex AI IAM
 resource "google_project_iam_member" "aiplatform_user" {
   for_each = {
@@ -213,6 +231,10 @@ resource "google_cloud_run_v2_job" "etl_job" {
         env {
           name  = "DATAFORM_REPOSITORY_ID"
           value = google_dataform_repository.health_repo.name
+        }
+        env {
+          name  = "DATAFORM_SERVICE_ACCOUNT"
+          value = google_service_account.etl_sa.email
         }
         env {
           name  = "DEFAULT_CPAP_START_DATE"
@@ -291,6 +313,10 @@ resource "google_cloud_run_v2_service" "web" {
       env {
         name  = "DATAFORM_REPOSITORY_ID"
         value = google_dataform_repository.health_repo.name
+      }
+      env {
+        name  = "DATAFORM_SERVICE_ACCOUNT"
+        value = google_service_account.etl_sa.email
       }
       env {
         name  = "GEMINI_MODEL"

@@ -31,6 +31,7 @@ class DataformRunner:
         dataform_dir: str,
         bq_location: str = "US",
         silver_dataset: str = "nvd_health_silver",
+        service_account: Optional[str] = None,
     ) -> None:
         self.project_id = project_id
         self.region = region
@@ -39,6 +40,10 @@ class DataformRunner:
         self.dataform_dir = Path(dataform_dir)
         self.bq_location = bq_location
         self.silver_dataset = silver_dataset
+        self.service_account = (
+            service_account
+            or f"nvd-health-etl-sa@{project_id}.iam.gserviceaccount.com"
+        )
         self.client = dataform.DataformClient()
 
     @property
@@ -150,6 +155,7 @@ class DataformRunner:
                 compilation_result=compilation.name,
                 invocation_config=dataform.InvocationConfig(
                     fully_refresh_incremental_tables_enabled=False,
+                    service_account=self.service_account,
                 ),
             ),
         )
