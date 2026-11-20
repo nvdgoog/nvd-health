@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Bot, Send, Code2, Sparkles, Loader2 } from "lucide-react";
 import { api, type ChartSpec } from "../api";
 import { DynamicChart } from "./DynamicChart";
+import { MarkdownMessage } from "./MarkdownMessage";
 
 interface MessageItem {
   id: string;
@@ -126,7 +127,11 @@ export const AnalystPanel: React.FC<{ compact?: boolean }> = ({
                   : "bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100"
               }`}
             >
-              <div className="whitespace-pre-wrap leading-relaxed">{m.text}</div>
+              {m.role === "user" ? (
+                <div className="whitespace-pre-wrap leading-relaxed">{m.text}</div>
+              ) : (
+                <MarkdownMessage content={m.text} />
+              )}
 
               {m.charts && m.charts.length > 0 && (
                 <div className="space-y-3 pt-1">
@@ -137,7 +142,7 @@ export const AnalystPanel: React.FC<{ compact?: boolean }> = ({
               )}
 
               {m.sqlQueries && m.sqlQueries.length > 0 && (
-                <div>
+                <div className="pt-1 border-t border-slate-200/70 dark:border-slate-700/70">
                   <button
                     onClick={() =>
                       setOpenSqlMap((prev) => ({
@@ -145,10 +150,12 @@ export const AnalystPanel: React.FC<{ compact?: boolean }> = ({
                         [m.id]: !prev[m.id],
                       }))
                     }
-                    className="inline-flex items-center gap-1.5 text-xs font-medium text-sky-700 dark:text-sky-300 hover:underline"
+                    className="inline-flex items-center gap-1.5 text-[11px] font-medium text-slate-500 dark:text-slate-400 hover:text-sky-700 dark:hover:text-sky-300"
                   >
-                    <Code2 className="w-3.5 h-3.5" />
-                    {openSqlMap[m.id] ? "Hide Verified SQL" : `Show Verified SQL (${m.sqlQueries.length})`}
+                    <Code2 className="w-3 h-3" />
+                    {openSqlMap[m.id]
+                      ? "Hide data query"
+                      : `View data query (${m.sqlQueries.length})`}
                   </button>
                   {openSqlMap[m.id] && (
                     <div className="mt-2 space-y-2">

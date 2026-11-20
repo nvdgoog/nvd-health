@@ -1,8 +1,20 @@
 from __future__ import annotations
 
+from contextvars import ContextVar
 import json
 import re
 from typing import Any, Dict, List, Optional
+
+_EXECUTED_SQL_LOG: ContextVar[Optional[List[str]]] = ContextVar(
+    "_EXECUTED_SQL_LOG", default=None
+)
+
+
+def start_sql_audit_log() -> List[str]:
+    """Initialize a per-request SQL audit list in ContextVar."""
+    buf: List[str] = []
+    _EXECUTED_SQL_LOG.set(buf)
+    return buf
 
 FORBIDDEN_SQL_KEYWORDS = re.compile(
     r"\b(INSERT|UPDATE|DELETE|MERGE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|EXECUTE|CALL|EXPORT|LOAD|COPY)\b",
@@ -125,6 +137,9 @@ def run_readonly_sql(sql: str, max_rows: int = 200) -> str:
     from google.cloud import bigquery
 
     safe_sql = validate_readonly_sql(sql)
+    audit_log = _EXECUTED_SQL_LOG.get()
+    if audit_log is not None and safe_sql not in audit_log:
+        audit_log.append(safe_sql)
     bounded_max = max(1, min(int(max_rows), 500))
     client = get_bq_client()
     job_config = bigquery.QueryJobConfig(

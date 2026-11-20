@@ -9,6 +9,7 @@ from app.agent.sql_tools import (
     describe_table_schema,
     list_health_tables,
     run_readonly_sql,
+    start_sql_audit_log,
 )
 from app.config import Settings, get_settings
 
@@ -33,10 +34,11 @@ CRITICAL DOMAIN & TIMEZONE RULES:
 - Default CPAP start date is `{settings.default_cpap_start_date}` (verify dynamically via `cpap_start_date` in Silver or `bronze_app_settings`).
 - NEVER hallucinate or estimate numbers. ALWAYS call `run_readonly_sql` to verify every metric before responding.
 
-OUTPUT FORMATTING:
-- Provide clear, clinically grounded insights citing exact dates, sample sizes, and SQL-verified numbers.
-- Include the exact SQL query inside a collapsible or labeled ```sql code block when helpful or requested.
-- Whenever answering trend, comparison, or tabular breakdown questions, ALSO emit a structured ```chart-json fenced block matching this schema so the UI renders an interactive chart/table inline:
+OUTPUT FORMATTING (FOR NON-TECHNICAL BUSINESS & CLINICAL USERS):
+- Write in clear, warm, easy-to-read plain English suited for a non-technical reader (no database table names, no snake_case column names like `hrv_rmssd_ms` or `v_cpap_before_after_summary`, and NO SQL code or `<details>` HTML tags in your response unless the user explicitly asks to see the SQL).
+- Translate metrics into human terms (e.g. "Average Blood Oxygen (SpO2)", "Heart Rate Variability (HRV)", "Resting Heart Rate", "Deep Sleep %", "CPAP AHI").
+- Lead with a concise 1–2 sentence takeaway, followed by scannable bullet points or a clean summary table, citing exact dates and verified numbers.
+- Whenever answering trend, comparison, or tabular breakdown questions, emit a structured ```chart-json fenced block matching this schema so the UI renders an interactive chart/table inline:
 ```chart-json
 {{
   "type": "line" | "bar" | "scatter" | "table",
@@ -83,10 +85,13 @@ def build_adk_agent(
     )
 
 
-def extract_structured_blocks(markdown_text: str) -> Dict[str, Any]:
-    """Extract ```chart-json and ```sql blocks from agent markdown output."""
+def extract_structured_blocks(
+    markdown_text: str,
+    executed_sql: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Extract ```chart-json and ```sql blocks and strip raw SQL/HTML details from user-facing prose."""
     charts: List[Dict[str, Any]] = []
-    sql_queries: List[str] = []
+    sql_queries: List[str] = list(executed_sql or [])
 
     for match in re.finditer(r"```chart-json\s*\n(.*?)```", markdown_text, re.DOTALL):
         raw_json = match.group(1).strip()
@@ -99,12 +104,19 @@ def extract_structured_blocks(markdown_text: str) -> Dict[str, Any]:
 
     for match in re.finditer(r"```sql\s*\n(.*?)```", markdown_text, re.DOTALL):
         q = match.group(1).strip()
-        if q:
+        if q and q not in sql_queries:
             sql_queries.append(q)
 
     cleaned_text = re.sub(
         r"```chart-json\s*\n.*?```", "", markdown_text, flags=re.DOTALL
-    ).strip()
+    )
+    cleaned_text = re.sub(
+        r"<details>.*?</details>", "", cleaned_text, flags=re.DOTALL | re.IGNORECASE
+    )
+    cleaned_text = re.sub(
+        r"```sql\s*\n.*?```", "", cleaned_text, flags=re.DOTALL | re.IGNORECASE
+    )
+    cleaned_text = re.sub(r"\n{3,}", "\n\n", cleaned_text).strip()
 
     return {
         "reply": cleaned_text,
@@ -228,6 +240,7 @@ class HealthAnalystService:
                 self._local_sessions[cache_key] = runner
 
             try:
+                sql_audit_log = start_sql_audit_log()
                 chunks: List[str] = []
                 async for event in runner.run_async(
                     user_id=user_id,
@@ -240,7 +253,9 @@ class HealthAnalystService:
                                 chunks.append(part.text)
 
                 full_text = "\n".join(chunks).strip()
-                structured = extract_structured_blocks(full_text)
+                structured = extract_structured_blocks(
+                    full_text, executed_sql=sql_audit_log
+                )
                 return {
                     "session_id": active_session_id,
                     "mode": "local_adk_runner",
