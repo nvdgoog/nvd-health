@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any, Dict, List, Optional
 
@@ -49,9 +50,20 @@ OUTPUT FORMATTING:
 """
 
 
-def build_adk_agent(settings: Optional[Settings] = None) -> Any:
+def configure_vertex_genai_env(settings: Settings) -> None:
+    """Ensure google-genai / google-adk routes through Vertex AI ADC rather than AI Studio API keys."""
+    os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "TRUE")
+    os.environ.setdefault("GOOGLE_CLOUD_PROJECT", settings.gcp_project_id)
+    os.environ.setdefault("GOOGLE_CLOUD_LOCATION", settings.gcp_region)
+
+
+def build_adk_agent(
+    settings: Optional[Settings] = None,
+    model_override: Optional[str] = None,
+) -> Any:
     """Construct the Google ADK Agent configured for Vertex AI / Gemini + BigQuery tools."""
     cfg = settings or get_settings()
+    configure_vertex_genai_env(cfg)
     try:
         from google.adk.agents import Agent  # type: ignore
     except ImportError as exc:
@@ -61,7 +73,7 @@ def build_adk_agent(settings: Optional[Settings] = None) -> Any:
 
     return Agent(
         name="nvd_health_analyst",
-        model=cfg.gemini_model,
+        model=model_override or cfg.gemini_model,
         description=(
             "Personal Health Data Analyst querying Medallion BigQuery datasets "
             "(Gold, Silver, Bronze) for CPAP, sleep architecture, vitals, and intraday trends."
@@ -174,17 +186,9 @@ class HealthAnalystService:
         from google.adk.sessions import InMemorySessionService  # type: ignore
         from google.genai import types  # type: ignore
 
+        configure_vertex_genai_env(self.settings)
         session_service = self._local_sessions.setdefault(
             "service", InMemorySessionService()
-        )
-        agent = self._local_sessions.setdefault("agent", build_adk_agent(self.settings))
-        runner = self._local_sessions.setdefault(
-            "runner",
-            Runner(
-                agent=agent,
-                app_name="nvd_health_analyst",
-                session_service=session_service,
-            ),
         )
 
         active_session_id = session_id or f"local-{uuid.uuid4().hex[:10]}"
@@ -204,25 +208,52 @@ class HealthAnalystService:
             role="user",
             parts=[types.Part.from_text(text=message)],
         )
-        chunks: List[str] = []
-        async for event in runner.run_async(
-            user_id=user_id,
-            session_id=active_session_id,
-            new_message=content,
-        ):
-            if event.content and getattr(event.content, "parts", None):
-                for part in event.content.parts:
-                    if getattr(part, "text", None):
-                        chunks.append(part.text)
 
-        full_text = "\n".join(chunks).strip()
-        structured = extract_structured_blocks(full_text)
-        return {
-            "session_id": active_session_id,
-            "mode": "local_adk_runner",
-            "model": self.settings.gemini_model,
-            **structured,
-        }
+        models_to_try = [self.settings.gemini_model]
+        if self.settings.gemini_model != "gemini-2.5-pro":
+            models_to_try.append("gemini-2.5-pro")
+
+        last_exc: Optional[Exception] = None
+        for model_name in models_to_try:
+            cache_key = f"runner:{model_name}"
+            runner = self._local_sessions.get(cache_key)
+            if runner is None:
+                agent = build_adk_agent(self.settings, model_override=model_name)
+                runner = Runner(
+                    agent=agent,
+                    app_name="nvd_health_analyst",
+                    session_service=session_service,
+                )
+                self._local_sessions[cache_key] = runner
+
+            try:
+                chunks: List[str] = []
+                async for event in runner.run_async(
+                    user_id=user_id,
+                    session_id=active_session_id,
+                    new_message=content,
+                ):
+                    if event.content and getattr(event.content, "parts", None):
+                        for part in event.content.parts:
+                            if getattr(part, "text", None):
+                                chunks.append(part.text)
+
+                full_text = "\n".join(chunks).strip()
+                structured = extract_structured_blocks(full_text)
+                return {
+                    "session_id": active_session_id,
+                    "mode": "local_adk_runner",
+                    "model": model_name,
+                    **structured,
+                }
+            except Exception as exc:
+                last_exc = exc
+                msg = str(exc)
+                if ("404" in msg or "NOT_FOUND" in msg) and model_name != models_to_try[-1]:
+                    continue
+                raise
+
+        raise last_exc or RuntimeError("ADK runner failed without output.")
 
 
 def _extract_text_from_event(event: Any) -> str:

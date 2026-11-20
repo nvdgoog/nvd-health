@@ -323,6 +323,18 @@ resource "google_cloud_run_v2_service" "web" {
         value = var.gemini_model
       }
       env {
+        name  = "GOOGLE_GENAI_USE_VERTEXAI"
+        value = "TRUE"
+      }
+      env {
+        name  = "GOOGLE_CLOUD_PROJECT"
+        value = var.project_id
+      }
+      env {
+        name  = "GOOGLE_CLOUD_LOCATION"
+        value = var.region
+      }
+      env {
         name  = "AGENT_ENGINE_RESOURCE_NAME"
         value = var.agent_engine_resource_name
       }
