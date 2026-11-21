@@ -2,8 +2,50 @@ data "google_project" "current" {
   project_id = var.project_id
 }
 
-data "google_storage_bucket" "raw_data" {
-  name = var.gcs_raw_bucket
+# GCS Bucket for raw exports with CORS + cost-optimizing lifecycle rules
+resource "google_storage_bucket" "raw_data" {
+  name                        = var.gcs_raw_bucket
+  location                    = var.bq_location
+  uniform_bucket_level_access = true
+  force_destroy               = false
+
+  cors {
+    origin          = ["*"]
+    method          = ["GET", "HEAD", "PUT", "POST", "OPTIONS"]
+    response_header = ["Content-Type", "Content-Length", "Content-Range", "Location", "x-goog-resumable", "ETag"]
+    max_age_seconds = 3600
+  }
+
+  # Delete temporary unzipped CSV scratch copies 14 days after upload (SHA-256 ledger tracks Bronze state)
+  lifecycle_rule {
+    condition {
+      age            = 14
+      matches_prefix = ["uploads/google_takeout/unzipped/"]
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
+  # Transition archived raw exports to Coldline after 30 days to minimize storage cost
+  lifecycle_rule {
+    condition {
+      age = 30
+      matches_prefix = [
+        "uploads/google_takeout/zips/",
+        "uploads/google_takeout/folders/",
+        "uploads/reacthealth_pdf/",
+        "uploads/transcend_micro/",
+        "uploads/zenplanner/",
+      ]
+    }
+    action {
+      type          = "SetStorageClass"
+      storage_class = "COLDLINE"
+    }
+  }
+
+  depends_on = [google_project_service.enabled]
 }
 
 locals {
@@ -32,13 +74,32 @@ resource "google_project_service" "enabled" {
   disable_on_destroy = false
 }
 
-# Artifact Registry
+# Artifact Registry with automated image retention cleanup
 resource "google_artifact_registry_repository" "repo" {
-  location      = var.region
-  repository_id = "nvd-health"
-  description   = "Container images for NVD Personal Health Platform"
-  format        = "DOCKER"
-  depends_on    = [google_project_service.enabled]
+  location               = var.region
+  repository_id          = "nvd-health"
+  description            = "Container images for NVD Personal Health Platform"
+  format                 = "DOCKER"
+  cleanup_policy_dry_run = false
+
+  cleanup_policies {
+    id     = "delete-stale-images"
+    action = "DELETE"
+    condition {
+      tag_state  = "ANY"
+      older_than = "604800s" # 7 days
+    }
+  }
+
+  cleanup_policies {
+    id     = "keep-recent-versions"
+    action = "KEEP"
+    most_recent_versions {
+      keep_count = 3
+    }
+  }
+
+  depends_on = [google_project_service.enabled]
 }
 
 # BigQuery Medallion Datasets (multi-region US)
@@ -66,15 +127,15 @@ resource "google_service_account" "agent_sa" {
   display_name = "NVD Health Vertex AI Agent Engine Read-Only SA"
 }
 
-# Storage IAM scoped to gs://nvd-health-raw-data
+# Storage IAM scoped to gs://${var.gcs_raw_bucket}
 resource "google_storage_bucket_iam_member" "web_storage_admin" {
-  bucket = data.google_storage_bucket.raw_data.name
+  bucket = google_storage_bucket.raw_data.name
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.web_sa.email}"
 }
 
 resource "google_storage_bucket_iam_member" "etl_storage_admin" {
-  bucket = data.google_storage_bucket.raw_data.name
+  bucket = google_storage_bucket.raw_data.name
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.etl_sa.email}"
 }

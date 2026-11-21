@@ -19,7 +19,7 @@ variable "bq_location" {
 variable "gcs_raw_bucket" {
   type        = string
   default     = "nvd-health-raw-data"
-  description = "Existing multi-region US GCS bucket holding raw health exports."
+  description = "Globally unique multi-region US GCS bucket holding raw health exports."
 }
 
 variable "container_image" {

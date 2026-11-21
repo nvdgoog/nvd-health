@@ -1,0 +1,31 @@
+{
+  "rule": [
+    {
+      "action": {
+        "type": "Delete"
+      },
+      "condition": {
+        "age": 14,
+        "matchesPrefix": [
+          "uploads/google_takeout/unzipped/"
+        ]
+      }
+    },
+    {
+      "action": {
+        "type": "SetStorageClass",
+        "storageClass": "COLDLINE"
+      },
+      "condition": {
+        "age": 30,
+        "matchesPrefix": [
+          "uploads/google_takeout/zips/",
+          "uploads/google_takeout/folders/",
+          "uploads/reacthealth_pdf/",
+          "uploads/transcend_micro/",
+          "uploads/zenplanner/"
+        ]
+      }
+    }
+  ]
+}

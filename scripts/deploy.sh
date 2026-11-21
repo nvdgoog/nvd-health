@@ -34,9 +34,16 @@ gcloud builds submit \
   --tag="${IMAGE}" \
   .
 
-echo "==> 3. Configuring CORS on gs://${BUCKET} for Direct-to-GCS browser uploads"
+echo "==> 3. Ensuring gs://${BUCKET} exists and configuring CORS + lifecycle policy"
+if ! gcloud storage buckets describe "gs://${BUCKET}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+  gcloud storage buckets create "gs://${BUCKET}" \
+    --location="${BQ_LOCATION:-US}" \
+    --uniform-bucket-level-access \
+    --project="${PROJECT_ID}"
+fi
 gcloud storage buckets update "gs://${BUCKET}" \
   --cors-file=infra/gcs-cors.json \
+  --lifecycle-file=infra/gcs-lifecycle.json \
   --project="${PROJECT_ID}"
 
 echo "==> 4. Applying Terraform infrastructure (with gcloud fallback if Cloud Shell IPv6 fails)"
@@ -45,13 +52,18 @@ TERRAFORM_OK=true
 if ! terraform init -upgrade; then
   TERRAFORM_OK=false
 fi
+if [ "${TERRAFORM_OK}" = "true" ] && ! terraform state show google_storage_bucket.raw_data >/dev/null 2>&1; then
+  if gcloud storage buckets describe "gs://${BUCKET}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+    terraform import -var="container_image=${IMAGE}" -var="project_id=${PROJECT_ID}" -var="region=${REGION}" -var="gcs_raw_bucket=${BUCKET}" google_storage_bucket.raw_data "${BUCKET}" || true
+  fi
+fi
 if [ "${TERRAFORM_OK}" = "true" ] && ! terraform state show google_artifact_registry_repository.repo >/dev/null 2>&1; then
   if gcloud artifacts repositories describe nvd-health --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
-    terraform import -var="container_image=${IMAGE}" google_artifact_registry_repository.repo "projects/${PROJECT_ID}/locations/${REGION}/repositories/nvd-health" || true
+    terraform import -var="container_image=${IMAGE}" -var="project_id=${PROJECT_ID}" -var="region=${REGION}" -var="gcs_raw_bucket=${BUCKET}" google_artifact_registry_repository.repo "projects/${PROJECT_ID}/locations/${REGION}/repositories/nvd-health" || true
   fi
 fi
 if [ "${TERRAFORM_OK}" = "true" ]; then
-  if ! terraform apply -var="container_image=${IMAGE}" -auto-approve; then
+  if ! terraform apply -var="container_image=${IMAGE}" -var="project_id=${PROJECT_ID}" -var="region=${REGION}" -var="gcs_raw_bucket=${BUCKET}" -auto-approve; then
     TERRAFORM_OK=false
   fi
 fi
