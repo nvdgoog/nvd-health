@@ -1,4 +1,4 @@
-defaultProject: house-tully-310623
+defaultProject: TARGET_GCP_PROJECT_ID
 defaultLocation: US
 defaultDataset: nvd_health_silver
 defaultAssertionDataset: nvd_health_silver

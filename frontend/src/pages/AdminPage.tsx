@@ -82,18 +82,21 @@ export const AdminPage: React.FC = () => {
     max_date: string | null;
   } | null>(null);
   const [syncingSheet, setSyncingSheet] = useState(false);
+  const [bucketName, setBucketName] = useState("raw-health-bucket");
 
   const sseRef = useRef<EventSource | null>(null);
 
   const refreshAll = async () => {
     try {
-      const [runsRes, ledgerRes, settingsRes, connRes, gsRes] = await Promise.all([
+      const [runsRes, ledgerRes, settingsRes, connRes, gsRes, healthRes] = await Promise.all([
         api.listEtlRuns(),
         api.getLedger(),
         api.getSettings(),
         api.getConnectors(),
         api.getGSheetsStatus().catch(() => null),
+        api.getHealth().catch(() => null),
       ]);
+      if (healthRes?.bucket) setBucketName(healthRes.bucket);
       setRuns(runsRes.runs);
       if (activeRun) {
         const updated = runsRes.runs.find((r) => r.run_id === activeRun.run_id);
@@ -155,7 +158,7 @@ export const AdminPage: React.FC = () => {
         content_type: zipFile.type || "application/zip",
         resumable: true,
       });
-      setUploadStatusMsg("Uploading directly to gs://nvd-health-raw-data...");
+      setUploadStatusMsg(`Uploading directly to gs://${bucketName}...`);
       await uploadFileDirectToGcs(zipFile, signed, (done, total) => {
         setZipProgress(total > 0 ? Math.round((done / total) * 100) : 100);
       });
@@ -298,7 +301,7 @@ export const AdminPage: React.FC = () => {
       });
       watchRunStream(triggered.run_id);
       setUploadStatusMsg(
-        `Triggered ETL run ${triggered.run_id} against gs://nvd-health-raw-data/`
+        `Triggered ETL run ${triggered.run_id} against gs://${bucketName}/`
       );
     } catch (err) {
       setErrorMsg((err as Error).message);

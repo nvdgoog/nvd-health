@@ -4,7 +4,7 @@ data "google_project" "current" {
 
 # GCS Bucket for raw exports with CORS + cost-optimizing lifecycle rules
 resource "google_storage_bucket" "raw_data" {
-  name                        = var.gcs_raw_bucket
+  name                        = local.effective_raw_bucket
   location                    = var.bq_location
   uniform_bucket_level_access = true
   force_destroy               = false
@@ -49,6 +49,8 @@ resource "google_storage_bucket" "raw_data" {
 }
 
 locals {
+  effective_raw_bucket = var.gcs_raw_bucket != "" ? var.gcs_raw_bucket : "${var.project_id}-health-raw-data"
+  effective_container_image = var.container_image != "" ? var.container_image : "${var.region}-docker.pkg.dev/${var.project_id}/nvd-health/nvd-health-platform:latest"
   apis = [
     "run.googleapis.com",
     "bigquery.googleapis.com",
@@ -264,7 +266,7 @@ resource "google_cloud_run_v2_job" "etl_job" {
       timeout         = "14400s"
 
       containers {
-        image   = var.container_image
+        image   = local.effective_container_image
         command = ["python", "-m", "app.etl.cli"]
 
         resources {
@@ -288,7 +290,7 @@ resource "google_cloud_run_v2_job" "etl_job" {
         }
         env {
           name  = "GCS_RAW_BUCKET"
-          value = var.gcs_raw_bucket
+          value = local.effective_raw_bucket
         }
         env {
           name  = "DATAFORM_REPOSITORY_ID"
@@ -301,6 +303,10 @@ resource "google_cloud_run_v2_job" "etl_job" {
         env {
           name  = "DEFAULT_CPAP_START_DATE"
           value = var.default_cpap_start_date
+        }
+        env {
+          name  = "GOOGLE_SHEET_ID"
+          value = var.google_sheet_id
         }
       }
     }
@@ -335,7 +341,7 @@ resource "google_cloud_run_v2_service" "web" {
     }
 
     containers {
-      image = var.container_image
+      image = local.effective_container_image
 
       ports {
         container_port = 8080
@@ -362,7 +368,7 @@ resource "google_cloud_run_v2_service" "web" {
       }
       env {
         name  = "GCS_RAW_BUCKET"
-        value = var.gcs_raw_bucket
+        value = local.effective_raw_bucket
       }
       env {
         name  = "CLOUD_RUN_JOB_NAME"
@@ -410,7 +416,7 @@ resource "google_cloud_run_v2_service" "web" {
       }
       env {
         name  = "GOOGLE_SHEET_ID"
-        value = "17SgQVoT53xm5299WKZHsIW5PgLInuszCSfeLu50Zsvc"
+        value = var.google_sheet_id
       }
     }
   }

@@ -457,7 +457,7 @@ class HealthEtlRunner:
                 seen[blob.name] = blob
 
         if include_root_pdfs:
-            # Also capture root-level PDFs like gs://nvd-health-raw-data/8.21.26-11.18.26.pdf
+            # Also capture root-level PDFs like gs://<bucket>/8.21.26-11.18.26.pdf
             for blob in self.storage_client.list_blobs(bucket, delimiter="/"):
                 if blob.name.lower().endswith(".pdf"):
                     seen[blob.name] = blob

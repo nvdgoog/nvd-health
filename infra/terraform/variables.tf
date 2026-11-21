@@ -1,7 +1,6 @@
 variable "project_id" {
   type        = string
-  default     = "house-tully-310623"
-  description = "GCP Project ID."
+  description = "Target GCP Project ID."
 }
 
 variable "region" {
@@ -13,19 +12,25 @@ variable "region" {
 variable "bq_location" {
   type        = string
   default     = "US"
-  description = "BigQuery multi-region location matching gs://nvd-health-raw-data."
+  description = "BigQuery multi-region location matching the GCS raw export bucket."
 }
 
 variable "gcs_raw_bucket" {
   type        = string
-  default     = "nvd-health-raw-data"
-  description = "Globally unique multi-region US GCS bucket holding raw health exports."
+  default     = ""
+  description = "Globally unique multi-region US GCS bucket holding raw health exports (defaults to <project_id>-health-raw-data if empty)."
 }
 
 variable "container_image" {
   type        = string
-  default     = "us-central1-docker.pkg.dev/house-tully-310623/nvd-health/nvd-health-platform:latest"
-  description = "Artifact Registry container image shared by Cloud Run service and Cloud Run Job."
+  default     = ""
+  description = "Artifact Registry container image shared by Cloud Run service and Cloud Run Job (defaults to <region>-docker.pkg.dev/<project_id>/nvd-health/nvd-health-platform:latest)."
+}
+
+variable "google_sheet_id" {
+  type        = string
+  default     = "17SgQVoT53xm5299WKZHsIW5PgLInuszCSfeLu50Zsvc"
+  description = "Google Sheet ID for daily activity, coffee, wake-up observations, and baseline routines."
 }
 
 variable "gemini_model" {

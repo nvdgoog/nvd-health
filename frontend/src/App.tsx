@@ -8,6 +8,7 @@ import {
   Sun,
   X,
 } from "lucide-react";
+import { api, type HealthInfo } from "./api";
 import { AnalystPanel } from "./components/AnalystPanel";
 import { AdminPage } from "./pages/AdminPage";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -21,6 +22,14 @@ export const App: React.FC = () => {
     return localStorage.getItem("nvd-theme") === "dark";
   });
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [healthInfo, setHealthInfo] = useState<HealthInfo | null>(null);
+
+  useEffect(() => {
+    api
+      .getHealth()
+      .then(setHealthInfo)
+      .catch(() => null);
+  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -70,7 +79,7 @@ export const App: React.FC = () => {
                 NVD Health Platform
               </div>
               <div className="text-[11px] text-slate-500">
-                house-tully-310623 · America/Los_Angeles
+                {healthInfo?.project_id ? `${healthInfo.project_id} · ` : ""}America/Los_Angeles
               </div>
             </div>
           </div>

@@ -23,6 +23,10 @@ def main() -> int:
     args = parser.parse_args()
 
     settings = get_settings()
+    if not settings.gcp_project_id:
+        raise SystemExit(
+            "ERROR: GCP_PROJECT_ID (or GOOGLE_CLOUD_PROJECT) must be set."
+        )
     runner = DataformRunner(
         project_id=settings.gcp_project_id,
         region=settings.gcp_region,

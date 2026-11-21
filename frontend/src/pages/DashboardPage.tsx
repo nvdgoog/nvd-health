@@ -162,6 +162,7 @@ export const DashboardPage: React.FC = () => {
   const [showBaseline, setShowBaseline] = useState(false);
   const [journalQuery, setJournalQuery] = useState("");
   const [journalFilter, setJournalFilter] = useState<string>("all");
+  const [bucketName, setBucketName] = useState("raw-health-bucket");
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
@@ -182,13 +183,19 @@ export const DashboardPage: React.FC = () => {
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([api.getOverview(), api.getCpapImpact(), api.getHabitsImpact()])
-      .then(([ov, imp, hab]) => {
+    Promise.all([
+      api.getOverview(),
+      api.getCpapImpact(),
+      api.getHabitsImpact(),
+      api.getHealth().catch(() => null),
+    ])
+      .then(([ov, imp, hab, health]) => {
         setAllDays(ov.days);
         setCpapStartDate(ov.cpap_start_date);
         setImpactMetrics(imp.metrics);
         setHabitsImpact(hab.habits);
         setBaselineNotes(hab.baseline_notes || []);
+        if (health?.bucket) setBucketName(health.bucket);
       })
       .finally(() => setLoading(false));
   }, []);
@@ -353,7 +360,7 @@ export const DashboardPage: React.FC = () => {
           No conformed health data found in <code>nvd_health_gold</code> yet. Open the{" "}
           <b>Data Engineering &amp; Admin</b> tab and click{" "}
           <b>Run ETL on Existing GCS Prefix</b> to ingest{" "}
-          <code>gs://nvd-health-raw-data</code>.
+          <code>gs://{bucketName}</code>.
         </div>
       )}
 

@@ -1,10 +1,12 @@
-project_id              = "house-tully-310623"
+project_id              = "your-gcp-project-id"
 region                  = "us-central1"
 bq_location             = "US"
-gcs_raw_bucket          = "nvd-health-raw-data"
+# Optional: defaults to "<project_id>-health-raw-data" when omitted/empty
+# gcs_raw_bucket        = "your-unique-health-raw-data-bucket"
 gemini_model            = "gemini-4-hydrogen"
 default_cpap_start_date = "2026-10-13"
+google_sheet_id         = "17SgQVoT53xm5299WKZHsIW5PgLInuszCSfeLu50Zsvc"
 authorized_invokers = [
-  "user:admin@ndy.altostrat.com"
+  "user:your-email@example.com"
 ]
 enable_iap_lb = false

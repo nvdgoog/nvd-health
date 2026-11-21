@@ -1,3 +1,10 @@
+export interface HealthInfo {
+  status: string;
+  project_id: string;
+  region: string;
+  bucket: string;
+}
+
 export interface DailyPerformanceRow {
   health_date: string;
   cpap_start_date?: string;
@@ -406,4 +413,5 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ trigger_dataform: true }),
     }),
+  getHealth: () => fetchJson<HealthInfo>("/api/health"),
 };

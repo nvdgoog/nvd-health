@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import os
 from pathlib import Path
 from typing import Optional
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,10 +19,10 @@ class Settings(BaseSettings):
     )
 
     # GCP Project & Regions
-    gcp_project_id: str = Field(default="house-tully-310623")
+    gcp_project_id: str = Field(default="")
     gcp_region: str = Field(default="us-central1")
     bq_location: str = Field(default="US")
-    gcs_raw_bucket: str = Field(default="nvd-health-raw-data")
+    gcs_raw_bucket: str = Field(default="")
 
     # BigQuery Medallion Datasets
     bq_dataset_bronze: str = Field(default="nvd_health_bronze")
@@ -56,6 +57,18 @@ class Settings(BaseSettings):
     frontend_dist_dir: str = Field(
         default=str(Path(__file__).resolve().parents[2] / "frontend" / "dist")
     )
+
+    @model_validator(mode="after")
+    def _derive_project_defaults(self) -> "Settings":
+        if not self.gcp_project_id:
+            self.gcp_project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
+        if not self.gcs_raw_bucket and self.gcp_project_id:
+            self.gcs_raw_bucket = f"{self.gcp_project_id}-health-raw-data"
+        if not self.dataform_service_account and self.gcp_project_id:
+            self.dataform_service_account = (
+                f"nvd-health-etl-sa@{self.gcp_project_id}.iam.gserviceaccount.com"
+            )
+        return self
 
 
 @lru_cache(maxsize=1)

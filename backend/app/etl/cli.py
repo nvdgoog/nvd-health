@@ -11,7 +11,7 @@ from app.etl.runner import HealthEtlRunner
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Cloud Run Job ETL Worker for nvd-health-raw-data -> BigQuery Bronze + Dataform."
+        description="Cloud Run Job ETL Worker for GCS raw health bucket -> BigQuery Bronze + Dataform."
     )
     parser.add_argument(
         "--run-id",

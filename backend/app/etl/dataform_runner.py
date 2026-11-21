@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -104,6 +105,23 @@ class DataformRunner:
             if rel.startswith(".") or "node_modules/" in rel or rel in ("package.json", "package-lock.json", "dataform.json"):
                 continue
             contents = path.read_bytes()
+            if rel == "workflow_settings.yaml" and self.project_id:
+                rendered = re.sub(
+                    r"(?m)^defaultProject:\s*.*$",
+                    f"defaultProject: {self.project_id}",
+                    contents.decode("utf-8"),
+                )
+                rendered = re.sub(
+                    r"(?m)^defaultLocation:\s*.*$",
+                    f"defaultLocation: {self.bq_location}",
+                    rendered,
+                )
+                rendered = re.sub(
+                    r"(?m)^defaultDataset:\s*.*$",
+                    f"defaultDataset: {self.silver_dataset}",
+                    rendered,
+                )
+                contents = rendered.encode("utf-8")
             self.client.write_file(
                 request=dataform.WriteFileRequest(
                     workspace=self.workspace_path,
