@@ -63,7 +63,19 @@ export interface DailyPerformanceRow {
   hrv_avg_7d?: number | null;
   sleep_hours_avg_7d?: number | null;
   cpap_hours_avg_7d?: number | null;
+  cpap_source?: string | null;
+  transcend_device_sn?: string | null;
   transcend_usage_minutes?: number | null;
+  transcend_usage_hours?: number | null;
+  transcend_ahi?: number | null;
+  transcend_pressure?: number | null;
+  transcend_p95_pressure?: number | null;
+  transcend_avg_leak?: number | null;
+  transcend_p95_leak?: number | null;
+  transcend_sleep_score?: number | null;
+  transcend_flow_limited_index?: number | null;
+  transcend_snore_index?: number | null;
+  transcend_report_type?: string | null;
   zenplanner_workout_count?: number | null;
   zenplanner_wod_name?: string | null;
   activity_notes?: string | null;
@@ -414,4 +426,35 @@ export const api = {
       body: JSON.stringify({ trigger_dataform: true }),
     }),
   getHealth: () => fetchJson<HealthInfo>("/api/health"),
+  getTranscendStatus: () =>
+    fetchJson<{
+      folder_id: string;
+      folder_url: string;
+      night_rows: number;
+      report_rows: number;
+      min_date: string | null;
+      max_date: string | null;
+    }>("/api/admin/transcend/status"),
+  syncTranscendDrive: (folderId?: string, forceReload = false) =>
+    fetchJson<{
+      folder_id: string;
+      list_mode: string;
+      run_id: string;
+      files_scanned: number;
+      files_loaded: number;
+      files_skipped: number;
+      files_failed: number;
+      rows_staged: number;
+      loaded_files: string[];
+      warnings: string[];
+      dataform_status: string;
+    }>("/api/admin/transcend/sync-drive", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        folder_id: folderId || undefined,
+        trigger_dataform: true,
+        force_reload: forceReload,
+      }),
+    }),
 };

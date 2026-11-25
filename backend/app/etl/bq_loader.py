@@ -41,6 +41,8 @@ def build_merge_sql(
     order_parts: List[str] = []
     if spec.order_by_column and spec.order_by_column in all_columns:
         order_parts.append(f"`{spec.order_by_column}` DESC NULLS LAST")
+    if spec.table_name == "transcend_cpap_daily_usage" and "report_generated_at" in all_columns:
+        order_parts.append("`report_generated_at` DESC NULLS LAST")
     for fallback_col in ("_ingested_at", "updated_at", "ingested_at", "started_at"):
         if fallback_col in all_columns and fallback_col != spec.order_by_column:
             order_parts.append(f"`{fallback_col}` DESC NULLS LAST")
@@ -68,6 +70,12 @@ def build_merge_sql(
             match_guard = (
                 " AND (S.`report_generated_date` >= T.`report_generated_date`"
                 " OR T.`report_generated_date` IS NULL)"
+            )
+        elif spec.table_name == "transcend_cpap_daily_usage":
+            match_guard = (
+                " AND (COALESCE(S.`report_priority`, 0) > COALESCE(T.`report_priority`, 0)"
+                " OR (COALESCE(S.`report_priority`, 0) = COALESCE(T.`report_priority`, 0)"
+                " AND COALESCE(S.`report_generated_at`, '') >= COALESCE(T.`report_generated_at`, '')))"
             )
         update_clause = f"WHEN MATCHED{match_guard} THEN\n  UPDATE SET {assignments}\n"
 

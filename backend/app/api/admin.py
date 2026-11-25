@@ -66,6 +66,12 @@ class GSheetsSyncRequest(BaseModel):
     trigger_dataform: bool = True
 
 
+class TranscendDriveSyncRequest(BaseModel):
+    folder_id: Optional[str] = None
+    trigger_dataform: bool = True
+    force_reload: bool = False
+
+
 def _bq_client() -> bigquery.Client:
     s = get_settings()
     return bigquery.Client(project=s.gcp_project_id, location=s.bq_location)
@@ -496,6 +502,67 @@ def sync_google_sheet_observations(payload: Optional[GSheetsSyncRequest] = None)
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Google Sheet sync failed: {exc}") from exc
+
+
+@router.get("/transcend/status")
+def get_transcend_status() -> Dict[str, Any]:
+    settings = get_settings()
+    client = _bq_client()
+    bronze_fqn = f"{settings.gcp_project_id}.{settings.bq_dataset_bronze}"
+    usage_fqn = f"{bronze_fqn}.transcend_cpap_daily_usage"
+    reports_fqn = f"{bronze_fqn}.bronze_transcend_reports"
+
+    night_rows = 0
+    report_rows = 0
+    min_date = None
+    max_date = None
+    try:
+        client.get_table(usage_fqn)
+        row = list(
+            client.query(
+                f"SELECT COUNT(*) AS cnt, CAST(MIN(usage_date) AS STRING) AS mn, CAST(MAX(usage_date) AS STRING) AS mx FROM `{usage_fqn}`"
+            ).result()
+        )[0]
+        night_rows = int(row["cnt"] or 0)
+        min_date = row["mn"]
+        max_date = row["mx"]
+    except Exception:
+        pass
+    try:
+        client.get_table(reports_fqn)
+        row = list(client.query(f"SELECT COUNT(*) AS cnt FROM `{reports_fqn}`").result())[0]
+        report_rows = int(row["cnt"] or 0)
+    except Exception:
+        pass
+
+    return {
+        "folder_id": settings.transcend_drive_folder_id,
+        "folder_url": f"https://drive.google.com/drive/folders/{settings.transcend_drive_folder_id}",
+        "night_rows": night_rows,
+        "report_rows": report_rows,
+        "min_date": min_date,
+        "max_date": max_date,
+    }
+
+
+@router.post("/transcend/sync-drive")
+def sync_transcend_drive_folder_endpoint(
+    payload: Optional[TranscendDriveSyncRequest] = None,
+) -> Dict[str, Any]:
+    from app.etl.gdrive_transcend_sync import sync_transcend_drive_folder
+
+    settings = get_settings()
+    req = payload or TranscendDriveSyncRequest()
+    try:
+        return sync_transcend_drive_folder(
+            folder_id_or_url=req.folder_id or settings.transcend_drive_folder_id,
+            trigger_dataform=req.trigger_dataform,
+            force_reload=req.force_reload,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Transcend Drive sync failed: {exc}") from exc
 
 
 def _safe_json_loads(raw: Optional[str], fallback: Any) -> Any:

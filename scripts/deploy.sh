@@ -12,6 +12,7 @@ REGION="${GCP_REGION:-us-central1}"
 BQ_LOCATION="${BQ_LOCATION:-US}"
 BUCKET="${2:-${GCS_RAW_BUCKET:-${PROJECT_ID}-health-raw-data}}"
 GOOGLE_SHEET_ID="${GOOGLE_SHEET_ID:-17SgQVoT53xm5299WKZHsIW5PgLInuszCSfeLu50Zsvc}"
+TRANSCEND_DRIVE_FOLDER_ID="${TRANSCEND_DRIVE_FOLDER_ID:-1dVV82yiTNJs1nQmUNRZpxMunWBiwWRMs}"
 CPAP_START_DATE="${DEFAULT_CPAP_START_DATE:-2026-10-13}"
 IMAGE_TAG="${IMAGE_TAG:-$(date -u +%Y%m%d-%H%M%S)}"
 IMAGE="${CONTAINER_IMAGE:-${REGION}-docker.pkg.dev/${PROJECT_ID}/nvd-health/nvd-health-platform:${IMAGE_TAG}}"
@@ -40,6 +41,7 @@ gcloud services enable \
   cloudbuild.googleapis.com \
   iam.googleapis.com \
   sheets.googleapis.com \
+  drive.googleapis.com \
   --project="${PROJECT_ID}"
 
 if ! gcloud artifacts repositories describe nvd-health --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
@@ -75,6 +77,7 @@ TF_VARS=(
   -var="gcs_raw_bucket=${BUCKET}"
   -var="container_image=${IMAGE}"
   -var="google_sheet_id=${GOOGLE_SHEET_ID}"
+  -var="transcend_drive_folder_id=${TRANSCEND_DRIVE_FOLDER_ID}"
   -var="default_cpap_start_date=${CPAP_START_DATE}"
   -var="authorized_invokers=${INVOKERS_TF_VAL}"
 )
@@ -109,12 +112,12 @@ if [ "${TERRAFORM_OK}" != "true" ]; then
       --project="${PROJECT_ID}" \
       --region="${REGION}" \
       --image="${IMAGE}" \
-      --update-env-vars="GOOGLE_SHEET_ID=${GOOGLE_SHEET_ID}"
+      --update-env-vars="GOOGLE_SHEET_ID=${GOOGLE_SHEET_ID},TRANSCEND_DRIVE_FOLDER_ID=${TRANSCEND_DRIVE_FOLDER_ID}"
     gcloud run jobs update nvd-health-etl-job \
       --project="${PROJECT_ID}" \
       --region="${REGION}" \
       --image="${IMAGE}" \
-      --update-env-vars="GOOGLE_SHEET_ID=${GOOGLE_SHEET_ID}"
+      --update-env-vars="GOOGLE_SHEET_ID=${GOOGLE_SHEET_ID},TRANSCEND_DRIVE_FOLDER_ID=${TRANSCEND_DRIVE_FOLDER_ID}"
   else
     echo "ERROR: Initial Terraform provisioning failed before nvd-health-web existed. Resolve the Terraform error above (e.g. run outside IPv6-restricted shell or retry) and rerun $0."
     exit 1

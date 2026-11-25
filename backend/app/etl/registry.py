@@ -7,6 +7,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from app.etl.csv_parser import iter_rfc4180_csv_chunks, parse_rfc4180_csv_bytes
 from app.etl.pdf_parser import parse_reacthealth_pdf_bytes
+from app.etl.transcend_parser import parse_transcend_pdf_bytes
 from app.etl.schemas import (
     CORE_HEALTH_TABLES,
     TableSchemaSpec,
@@ -221,20 +222,23 @@ class ReactHealthPdfConnector(BaseConnector):
 
 
 class TranscendMicroConnector(BaseConnector):
-    """Pluggable connector scaffold for future Transcend Micro travel CPAP exports."""
+    """Connector for Transcend Micro travel CPAP compliance PDFs and CSV exports."""
 
     name = "transcend_micro"
     display_name = "Transcend Micro Travel CPAP"
-    supported_extensions = (".csv", ".pdf")
+    supported_extensions = (".pdf", ".csv")
     expected_prefixes = ("uploads/transcend_micro/",)
-    status = "ready_for_drop"
+    status = "active"
     description = (
-        "Extensible connector slot for Transcend Micro travel CPAP therapy exports. "
-        "Drops into nvd_health_bronze.transcend_cpap_daily_usage and joins to Silver."
+        "Parses Transcend Micro Compliance & FAA PDFs (or CSVs) into "
+        "nvd_health_bronze.transcend_cpap_daily_usage and joins cleanly to Silver."
     )
 
     def can_handle(self, blob_path: str) -> bool:
-        return "uploads/transcend_micro/" in blob_path.lower() and blob_path.lower().endswith(".csv")
+        low = blob_path.lower()
+        return "uploads/transcend_micro/" in low and (
+            low.endswith(".pdf") or low.endswith(".csv")
+        )
 
     def parse(
         self,
@@ -243,6 +247,35 @@ class TranscendMicroConnector(BaseConnector):
         run_id: str,
         ingested_at_iso: str,
     ) -> List[ParsedBatchItem]:
+        if blob_path.lower().endswith(".pdf"):
+            parsed = parse_transcend_pdf_bytes(
+                pdf_bytes=data,
+                source_file=blob_path,
+                run_id=run_id,
+                ingested_at_iso=ingested_at_iso,
+            )
+            items: List[ParsedBatchItem] = [
+                ParsedBatchItem(
+                    spec=CORE_HEALTH_TABLES["bronze_transcend_reports"],
+                    rows=[parsed.report_metadata],
+                    resolved_columns=dict(
+                        CORE_HEALTH_TABLES["bronze_transcend_reports"].columns
+                    ),
+                    warnings=parsed.warnings,
+                )
+            ]
+            if parsed.daily_rows:
+                items.append(
+                    ParsedBatchItem(
+                        spec=CORE_HEALTH_TABLES["transcend_cpap_daily_usage"],
+                        rows=parsed.daily_rows,
+                        resolved_columns=dict(
+                            CORE_HEALTH_TABLES["transcend_cpap_daily_usage"].columns
+                        ),
+                    )
+                )
+            return items
+
         spec = CORE_HEALTH_TABLES["transcend_cpap_daily_usage"]
         rows, resolved_cols = parse_rfc4180_csv_bytes(
             data=data,

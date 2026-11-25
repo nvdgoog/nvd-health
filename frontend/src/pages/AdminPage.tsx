@@ -3,9 +3,11 @@ import {
   CheckCircle2,
   CloudUpload,
   Database,
+  ExternalLink,
   FileText,
   FolderUp,
   Loader2,
+  Plane,
   Play,
   RefreshCw,
   Settings2,
@@ -84,19 +86,37 @@ export const AdminPage: React.FC = () => {
   const [syncingSheet, setSyncingSheet] = useState(false);
   const [bucketName, setBucketName] = useState("raw-health-bucket");
 
+  // Transcend Micro Google Drive Sync & Upload
+  const [transcendStatus, setTranscendStatus] = useState<{
+    folder_id: string;
+    folder_url: string;
+    night_rows: number;
+    report_rows: number;
+    min_date: string | null;
+    max_date: string | null;
+  } | null>(null);
+  const [transcendFolderInput, setTranscendFolderInput] = useState("");
+  const [syncingTranscend, setSyncingTranscend] = useState(false);
+  const [transcendFiles, setTranscendFiles] = useState<File[]>([]);
+
   const sseRef = useRef<EventSource | null>(null);
 
   const refreshAll = async () => {
     try {
-      const [runsRes, ledgerRes, settingsRes, connRes, gsRes, healthRes] = await Promise.all([
+      const [runsRes, ledgerRes, settingsRes, connRes, gsRes, healthRes, trRes] = await Promise.all([
         api.listEtlRuns(),
         api.getLedger(),
         api.getSettings(),
         api.getConnectors(),
         api.getGSheetsStatus().catch(() => null),
         api.getHealth().catch(() => null),
+        api.getTranscendStatus().catch(() => null),
       ]);
       if (healthRes?.bucket) setBucketName(healthRes.bucket);
+      if (trRes) {
+        setTranscendStatus(trRes);
+        setTranscendFolderInput((prev) => prev || trRes.folder_id);
+      }
       setRuns(runsRes.runs);
       if (activeRun) {
         const updated = runsRes.runs.find((r) => r.run_id === activeRun.run_id);
@@ -308,6 +328,62 @@ export const AdminPage: React.FC = () => {
     }
   };
 
+  const handleSyncTranscendDrive = async () => {
+    setSyncingTranscend(true);
+    setErrorMsg(null);
+    try {
+      const res = await api.syncTranscendDrive(
+        transcendFolderInput.trim() || undefined,
+        forceReload
+      );
+      setUploadStatusMsg(
+        `Transcend Drive sync (${res.list_mode}): scanned ${res.files_scanned}, loaded ${res.files_loaded} new, skipped ${res.files_skipped} existing (${res.rows_staged} rows · Dataform: ${res.dataform_status}).`
+      );
+      await refreshAll();
+    } catch (err) {
+      setErrorMsg((err as Error).message);
+    } finally {
+      setSyncingTranscend(false);
+    }
+  };
+
+  const handleUploadTranscendFiles = async () => {
+    if (transcendFiles.length === 0) return;
+    setErrorMsg(null);
+    setUploadingKind("transcend");
+    try {
+      const batchId = new Date().toISOString().replace(/[:.]/g, "-");
+      const batchRes = await api.getBatchSignedUrls({
+        source_type: "transcend_micro",
+        upload_batch_id: batchId,
+        files: transcendFiles.map((f) => ({
+          relative_path: f.name,
+          content_type: f.name.toLowerCase().endsWith(".pdf")
+            ? "application/pdf"
+            : "text/csv",
+          resumable: false,
+        })),
+      });
+      for (let i = 0; i < batchRes.items.length; i++) {
+        await uploadFileDirectToGcs(transcendFiles[i], batchRes.items[i]);
+      }
+      const triggered = await api.triggerEtl({
+        mode: "prefix",
+        prefixes: [batchRes.prefix],
+        force_reload: forceReload,
+      });
+      watchRunStream(triggered.run_id);
+      setUploadStatusMsg(
+        `Uploaded ${transcendFiles.length} Transcend Micro report(s) & started ${triggered.run_id}`
+      );
+      setTranscendFiles([]);
+    } catch (err) {
+      setErrorMsg((err as Error).message);
+    } finally {
+      setUploadingKind(null);
+    }
+  };
+
   const handleSaveCpapDate = async (useAuto: boolean) => {
     setSavingSetting(true);
     try {
@@ -497,6 +573,98 @@ export const AdminPage: React.FC = () => {
           >
             Upload PDF &amp; Run Incremental Load
           </button>
+        </div>
+      </div>
+
+      {/* Transcend Micro Travel CPAP — Google Drive Folder Sync & Upload */}
+      <div className="rounded-2xl border border-sky-200/80 dark:border-sky-900/60 bg-white dark:bg-slate-900 p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="space-y-0.5">
+            <div className="flex items-center gap-2 font-semibold text-sm">
+              <Plane className="w-4 h-4 text-sky-600" />
+              Transcend Micro Travel CPAP — Google Drive Sync &amp; Upload
+            </div>
+            <p className="text-xs text-slate-500">
+              Syncs new Compliance, Extended Sleep Score, and FAA PDFs incrementally via SHA-256 deduplication (skips files already in BigQuery).
+            </p>
+          </div>
+          {transcendStatus?.folder_url && (
+            <a
+              href={transcendStatus.folder_url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-sky-700 dark:text-sky-300 hover:underline"
+            >
+              Open Drive Folder
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-end">
+          <div className="space-y-2">
+            <label className="block text-[11px] font-medium text-slate-500">
+              Target Google Drive Folder ID or URL
+            </label>
+            <div className="flex flex-wrap gap-2">
+              <input
+                type="text"
+                value={transcendFolderInput}
+                onChange={(e) => setTranscendFolderInput(e.target.value)}
+                placeholder="Drive Folder ID or URL"
+                className="flex-1 min-w-[220px] rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-3 py-2 text-xs font-mono"
+              />
+              <button
+                onClick={handleSyncTranscendDrive}
+                disabled={syncingTranscend || uploadingKind !== null}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white px-4 py-2 text-xs font-semibold transition"
+              >
+                {syncingTranscend ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="w-3.5 h-3.5" />
+                )}
+                {syncingTranscend
+                  ? "Syncing Drive..."
+                  : "Sync New Reports from Drive"}
+              </button>
+            </div>
+            {transcendStatus && (
+              <div className="text-[11px] text-slate-500">
+                Loaded: <b>{transcendStatus.night_rows}</b> travel CPAP night(s) (
+                {transcendStatus.min_date || "—"} → {transcendStatus.max_date || "—"}) ·{" "}
+                <b>{transcendStatus.report_rows}</b> PDF report(s) synced
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-xl bg-slate-50 dark:bg-slate-800/50 p-3 space-y-2">
+            <div className="text-[11px] font-medium text-slate-600 dark:text-slate-300">
+              Or upload local Transcend Micro PDF / CSV files directly
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="file"
+                multiple
+                accept=".pdf,.csv,application/pdf,text/csv"
+                onChange={(e) =>
+                  setTranscendFiles(Array.from(e.target.files || []))
+                }
+                className="flex-1 text-xs text-slate-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-sky-50 file:text-sky-700 dark:file:bg-sky-950 dark:file:text-sky-300"
+              />
+              <button
+                onClick={handleUploadTranscendFiles}
+                disabled={
+                  transcendFiles.length === 0 ||
+                  uploadingKind !== null ||
+                  syncingTranscend
+                }
+                className="rounded-xl bg-slate-800 hover:bg-slate-900 dark:bg-slate-700 dark:hover:bg-slate-600 disabled:opacity-40 text-white px-3.5 py-1.5 text-xs font-medium transition"
+              >
+                Upload ({transcendFiles.length}) &amp; Load
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 

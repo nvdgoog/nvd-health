@@ -33,6 +33,12 @@ variable "google_sheet_id" {
   description = "Google Sheet ID for daily activity, coffee, wake-up observations, and baseline routines."
 }
 
+variable "transcend_drive_folder_id" {
+  type        = string
+  default     = "1dVV82yiTNJs1nQmUNRZpxMunWBiwWRMs"
+  description = "Google Drive folder ID containing Transcend Micro travel CPAP reports."
+}
+
 variable "gemini_model" {
   type        = string
   default     = "gemini-4-hydrogen"

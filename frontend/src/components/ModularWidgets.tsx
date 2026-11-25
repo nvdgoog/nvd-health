@@ -44,18 +44,58 @@ export const ModularExtensionWidgets: React.FC<{
           </span>
         </div>
         {transcendDays.length > 0 ? (
-          <p className="text-xs text-slate-600 dark:text-slate-300">
-            {transcendDays.length} travel CPAP nights loaded. Avg usage:{" "}
-            {(
-              transcendDays.reduce(
-                (s, d) => s + (d.transcend_usage_minutes || 0),
-                0
-              ) /
-              transcendDays.length /
-              60
-            ).toFixed(2)}
-            h.
-          </p>
+          <div className="text-xs text-slate-600 dark:text-slate-300 space-y-1">
+            <div>
+              <b>{transcendDays.length}</b> travel CPAP night(s) loaded · Avg usage:{" "}
+              <b>
+                {(
+                  transcendDays.reduce(
+                    (s, d) => s + (d.transcend_usage_minutes || 0),
+                    0
+                  ) /
+                  transcendDays.length /
+                  60
+                ).toFixed(2)}
+                h
+              </b>
+              {transcendDays.some((d) => d.transcend_ahi != null) && (
+                <>
+                  {" "}
+                  · Avg AHI:{" "}
+                  <b>
+                    {(
+                      transcendDays.reduce(
+                        (s, d) => s + (d.transcend_ahi ?? 0),
+                        0
+                      ) /
+                      transcendDays.filter((d) => d.transcend_ahi != null).length
+                    ).toFixed(2)}{" "}
+                    ev/hr
+                  </b>
+                </>
+              )}
+              {transcendDays.some((d) => d.transcend_sleep_score != null) && (
+                <>
+                  {" "}
+                  · Avg Score:{" "}
+                  <b>
+                    {(
+                      transcendDays.reduce(
+                        (s, d) => s + (d.transcend_sleep_score ?? 0),
+                        0
+                      ) /
+                      transcendDays.filter((d) => d.transcend_sleep_score != null)
+                        .length
+                    ).toFixed(0)}
+                    /100
+                  </b>
+                </>
+              )}
+            </div>
+            <div className="text-[11px] text-slate-500">
+              Automatically merged into CPAP Usage, AHI, Leak &amp; Best-30 compliance on nights without home ReactHealth sessions.
+            </div>
+          </div>
         ) : (
           <p className="text-xs text-slate-500">
             Drop Transcend Micro exports under{" "}

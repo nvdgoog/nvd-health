@@ -61,6 +61,7 @@ locals {
     "cloudbuild.googleapis.com",
     "iam.googleapis.com",
     "sheets.googleapis.com",
+    "drive.googleapis.com",
   ]
   medallion_datasets = {
     bronze = "nvd_health_bronze"
@@ -308,6 +309,10 @@ resource "google_cloud_run_v2_job" "etl_job" {
           name  = "GOOGLE_SHEET_ID"
           value = var.google_sheet_id
         }
+        env {
+          name  = "TRANSCEND_DRIVE_FOLDER_ID"
+          value = var.transcend_drive_folder_id
+        }
       }
     }
   }
@@ -417,6 +422,10 @@ resource "google_cloud_run_v2_service" "web" {
       env {
         name  = "GOOGLE_SHEET_ID"
         value = var.google_sheet_id
+      }
+      env {
+        name  = "TRANSCEND_DRIVE_FOLDER_ID"
+        value = var.transcend_drive_folder_id
       }
     }
   }

@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     google_sheet_id: str = Field(
         default="17SgQVoT53xm5299WKZHsIW5PgLInuszCSfeLu50Zsvc"
     )
+    transcend_drive_folder_id: str = Field(
+        default="1dVV82yiTNJs1nQmUNRZpxMunWBiwWRMs"
+    )
 
     # Frontend Static Bundle Path
     frontend_dist_dir: str = Field(

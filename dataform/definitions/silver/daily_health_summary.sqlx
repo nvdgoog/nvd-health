@@ -442,12 +442,25 @@ WITH
   daily_transcend AS (
     SELECT
       usage_date AS health_date,
-      SUM(COALESCE(usage_minutes, 0)) AS transcend_usage_minutes,
-      AVG(ahi) AS transcend_ahi,
-      AVG(pressure) AS transcend_pressure
+      device_sn AS transcend_device_sn,
+      mode AS transcend_mode,
+      usage_minutes AS transcend_usage_minutes,
+      usage_hours AS transcend_usage_hours,
+      ahi AS transcend_ahi,
+      pressure AS transcend_pressure,
+      p95_pressure AS transcend_p95_pressure,
+      avg_leak AS transcend_avg_leak,
+      p95_leak AS transcend_p95_leak,
+      sleep_score AS transcend_sleep_score,
+      flow_limited_index AS transcend_flow_limited_index,
+      snore_index AS transcend_snore_index,
+      report_type AS transcend_report_type
     FROM ${ref("transcend_cpap_daily_usage")}
     WHERE usage_date IS NOT NULL
-    GROUP BY 1
+    QUALIFY ROW_NUMBER() OVER (
+      PARTITION BY usage_date
+      ORDER BY report_priority DESC NULLS LAST, report_generated_at DESC NULLS LAST, usage_minutes DESC NULLS LAST, _ingested_at DESC
+    ) = 1
   ),
 
   daily_zenplanner AS (
@@ -527,21 +540,78 @@ SELECT
   ds.health_date >= cfg.cpap_start_date AS is_cpap_era,
   DATE_DIFF(ds.health_date, cfg.cpap_start_date, DAY) AS days_since_cpap_start,
 
-  -- CPAP Therapy (ReactHealth)
-  cpap.cpap_device_sn,
-  cpap.cpap_mode,
-  cpap.cpap_usage_duration_str,
-  cpap.cpap_usage_minutes,
-  cpap.cpap_usage_hours,
+  -- Unified CPAP Therapy (ReactHealth home CPAP primary; Transcend Micro travel CPAP fallback when no positive ReactHealth session)
   CASE
-    WHEN cpap.cpap_usage_minutes IS NULL THEN NULL
-    ELSE cpap.cpap_usage_minutes >= 240
+    WHEN cpap.cpap_usage_minutes IS NOT NULL AND (cpap.cpap_usage_minutes > 0 OR tr.transcend_usage_minutes IS NULL)
+      THEN 'ReactHealth'
+    WHEN tr.transcend_usage_minutes IS NOT NULL
+      THEN 'Transcend Micro'
+    ELSE NULL
+  END AS cpap_source,
+  IF(
+    cpap.cpap_usage_minutes IS NOT NULL AND (cpap.cpap_usage_minutes > 0 OR tr.transcend_usage_minutes IS NULL),
+    cpap.cpap_device_sn,
+    tr.transcend_device_sn
+  ) AS cpap_device_sn,
+  IF(
+    cpap.cpap_usage_minutes IS NOT NULL AND (cpap.cpap_usage_minutes > 0 OR tr.transcend_usage_minutes IS NULL),
+    cpap.cpap_mode,
+    tr.transcend_mode
+  ) AS cpap_mode,
+  IF(
+    cpap.cpap_usage_minutes IS NOT NULL AND (cpap.cpap_usage_minutes > 0 OR tr.transcend_usage_minutes IS NULL),
+    cpap.cpap_usage_duration_str,
+    FORMAT('%02d:%02d', DIV(tr.transcend_usage_minutes, 60), MOD(tr.transcend_usage_minutes, 60))
+  ) AS cpap_usage_duration_str,
+  IF(
+    cpap.cpap_usage_minutes IS NOT NULL AND (cpap.cpap_usage_minutes > 0 OR tr.transcend_usage_minutes IS NULL),
+    cpap.cpap_usage_minutes,
+    tr.transcend_usage_minutes
+  ) AS cpap_usage_minutes,
+  IF(
+    cpap.cpap_usage_minutes IS NOT NULL AND (cpap.cpap_usage_minutes > 0 OR tr.transcend_usage_minutes IS NULL),
+    cpap.cpap_usage_hours,
+    tr.transcend_usage_hours
+  ) AS cpap_usage_hours,
+  CASE
+    WHEN COALESCE(
+      IF(
+        cpap.cpap_usage_minutes IS NOT NULL AND (cpap.cpap_usage_minutes > 0 OR tr.transcend_usage_minutes IS NULL),
+        cpap.cpap_usage_minutes,
+        tr.transcend_usage_minutes
+      ),
+      NULL
+    ) IS NULL THEN NULL
+    ELSE COALESCE(
+      IF(
+        cpap.cpap_usage_minutes IS NOT NULL AND (cpap.cpap_usage_minutes > 0 OR tr.transcend_usage_minutes IS NULL),
+        cpap.cpap_usage_minutes,
+        tr.transcend_usage_minutes
+      ),
+      0
+    ) >= 240
   END AS cpap_compliant_4h,
-  cpap.cpap_pressure,
-  cpap.cpap_p95_pressure,
-  cpap.cpap_ahi,
+  IF(
+    cpap.cpap_usage_minutes IS NOT NULL AND (cpap.cpap_usage_minutes > 0 OR tr.transcend_usage_minutes IS NULL),
+    cpap.cpap_pressure,
+    tr.transcend_pressure
+  ) AS cpap_pressure,
+  IF(
+    cpap.cpap_usage_minutes IS NOT NULL AND (cpap.cpap_usage_minutes > 0 OR tr.transcend_usage_minutes IS NULL),
+    cpap.cpap_p95_pressure,
+    tr.transcend_p95_pressure
+  ) AS cpap_p95_pressure,
+  IF(
+    cpap.cpap_usage_minutes IS NOT NULL AND (cpap.cpap_usage_minutes > 0 OR tr.transcend_usage_minutes IS NULL),
+    cpap.cpap_ahi,
+    tr.transcend_ahi
+  ) AS cpap_ahi,
   cpap.cpap_cai,
-  cpap.cpap_avg_leak,
+  IF(
+    cpap.cpap_usage_minutes IS NOT NULL AND (cpap.cpap_usage_minutes > 0 OR tr.transcend_usage_minutes IS NULL),
+    cpap.cpap_avg_leak,
+    tr.transcend_avg_leak
+  ) AS cpap_avg_leak,
   cpap.cpap_report_generated_date,
 
   -- Sleep Architecture & Scores (Wake-up date in America/Los_Angeles)
@@ -651,9 +721,18 @@ SELECT
   ex.exercise_types,
 
   -- Extensible Schema Hooks for Transcend Micro & ZenPlanner
+  tr.transcend_device_sn,
   tr.transcend_usage_minutes,
+  tr.transcend_usage_hours,
   tr.transcend_ahi,
   tr.transcend_pressure,
+  tr.transcend_p95_pressure,
+  tr.transcend_avg_leak,
+  tr.transcend_p95_leak,
+  tr.transcend_sleep_score,
+  tr.transcend_flow_limited_index,
+  tr.transcend_snore_index,
+  tr.transcend_report_type,
   zp.zenplanner_workout_count,
   zp.zenplanner_wod_name,
   zp.zenplanner_rx_flag,
